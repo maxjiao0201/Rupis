@@ -1,7 +1,9 @@
 # Rupis
 
 **R**edstone **s**cript —— 面向 Minecraft 红石结构的脚本语言与解释器。
+
 **注意，当前版本并不是正式版，在Rupis ide或是rupis解释器中还有很多问题，请谨慎使用！**
+**当前版本的自述文件仅供开发者使用。**
 
 Rupis 用来描述红石电路：写 `.rpi` 脚本，解释器把它编译成一份"方块世界数据"，
 再导出成 `/setblock` 命令、JSON，或 Java 版结构方块直接加载的 `.mcstructure` 文件。
@@ -29,7 +31,7 @@ rep_chain(5, east)
 
 ## 一、快速开始
 
-解释器本身不需要任何第三方库，只要 Python 3.8+。
+解释器本身不需要任何第三方库。
 
 ```bash
 python main.py examples/demo.rpi                       # 输出 /setblock 命令
