@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -134,71 +135,97 @@ class TestIDE(unittest.TestCase):
         self.assertIn("rw", words)
 
     # ------------------------------------------------------------ lib 补全
-    def test_lib_binding_is_scanned(self):
-        self.ed.setPlainText("lib math\n")
-        self.assertEqual(self.ed._lib_bindings(), {"math": "math"})
+    def make_lib(self, name="util.rpi", text=None):
+        """建一个能被 lib 导入的 .rpi 脚本，返回它所在的目录。"""
 
-    def test_lib_binding_with_alias(self):
-        self.ed.setPlainText("lib math as m\n")
-        self.assertEqual(self.ed._lib_bindings(), {"math": "math", "m": "math"})
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        if text is None:
+            text = ("def helper(n):{\n    return n * 2\n}\n"
+                    "strudef box(v):{\n    rw{rsig=v}[0,0,0]\n}\n")
+        path = Path(tmp)
+        for part in name.split("/"):
+            path = path / part
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        self.ed.set_lib_paths([Path(tmp)])
+        return Path(tmp)
 
-    def test_dotted_lib_binds_top_level_package(self):
-        """import os.path 绑的是 os —— 和 Python 一样。"""
-        self.ed.setPlainText("lib os.path\n")
-        self.assertEqual(self.ed._lib_bindings(), {"os": "os"})
+    def test_lib_file_is_scanned(self):
+        self.make_lib()
+        self.ed.setPlainText("lib util\n")
+        files = self.ed._lib_files()
+        self.assertEqual(list(files), ["util"])
+        self.assertEqual(files["util"].name, "util.rpi")
 
-    def test_dotted_lib_with_alias_binds_whole_module(self):
-        self.ed.setPlainText("lib os.path as p\n")
-        self.assertEqual(self.ed._lib_bindings(), {"os": "os", "p": "os.path"})
+    def test_lib_file_with_alias(self):
+        self.make_lib()
+        self.ed.setPlainText("lib util as u\n")
+        self.assertEqual(list(self.ed._lib_files()), ["u"])
 
-    def test_member_completion_lists_module_members(self):
-        self.ed.setPlainText("lib math\nmath.sq")
+    def test_lib_file_in_subdirectory(self):
+        self.make_lib("sub/util.rpi")
+        self.ed.setPlainText("lib sub/util\n")
+        files = self.ed._lib_files()
+        self.assertEqual(list(files), ["util"])
+
+    def test_member_completion_lists_script_members(self):
+        self.make_lib()
+        self.ed.setPlainText("lib util\nutil.he")
         self.at_end()
         members = self.ed._member_completion()
         self.assertIsNotNone(members)
         words, prefix = members
-        self.assertIn("sqrt", words)
-        self.assertEqual(prefix, "sq")
+        self.assertIn("helper", words)
+        self.assertIn("box", words)
+        self.assertEqual(prefix, "he")
 
     def test_member_completion_uses_alias(self):
-        self.ed.setPlainText("lib math as m\nm.sq")
+        self.make_lib()
+        self.ed.setPlainText("lib util as u\nu.he")
         self.at_end()
         words, prefix = self.ed._member_completion()
-        self.assertIn("sqrt", words)
-        self.assertEqual(prefix, "sq")
+        self.assertIn("helper", words)
+        self.assertEqual(prefix, "he")
 
-    def test_member_completion_of_dotted_module(self):
-        self.ed.setPlainText("lib os.path\nos.path.")
-        self.at_end()
-        words, prefix = self.ed._member_completion()
-        self.assertIn("basename", words)
-        self.assertEqual(prefix, "")
-
-    def test_member_completion_ignores_unknown_module(self):
-        self.ed.setPlainText("lib no_such_module_xyz\nno_such_module_xyz.")
+    def test_member_completion_ignores_unknown_script(self):
+        self.make_lib()
+        self.ed.setPlainText("lib nosuchscript_xyz\nnosuchscript_xyz.")
         self.at_end()
         self.assertIsNone(self.ed._member_completion())
 
     def test_member_completion_ignores_plain_word(self):
-        self.ed.setPlainText("lib math\nrw")
+        self.make_lib()
+        self.ed.setPlainText("lib util\nrw")
         self.at_end()
         self.assertIsNone(self.ed._member_completion())
 
-    def test_start_completion_switches_to_module_members(self):
-        self.ed.setPlainText("lib math\nmath.sq")
+    def test_start_completion_switches_to_script_members(self):
+        self.make_lib()
+        self.ed.setPlainText("lib util\nutil.he")
         self.at_end()
         self.ed._start_completion()
-        self.assertIn("sqrt", self.ed._completer.model().stringList())
-        self.assertEqual(self.ed._completer.completionPrefix(), "sq")
+        self.assertIn("helper", self.ed._completer.model().stringList())
+        self.assertEqual(self.ed._completer.completionPrefix(), "he")
 
     def test_start_completion_falls_back_to_words(self):
+        self.make_lib()
         self.ed.setPlainText("rw")
         self.at_end()
         self.ed._start_completion()
         self.assertIn("rw", self.ed._completer.model().stringList())
 
+    def test_imported_names_are_in_the_word_list(self):
+        """导入进来的函数名也能直接补出来。"""
+        self.make_lib()
+        self.ed.setPlainText("lib util\n")
+        self.ed.refresh_definitions()
+        words = self.ed._completer.model().stringList()
+        self.assertIn("helper", words)
+        self.assertIn("box", words)
+
     def test_hint_bar_explains_lib(self):
-        self.ed.setPlainText("lib math")
+        self.ed.setPlainText("lib util")
         cursor = self.ed.textCursor()
         cursor.setPosition(1)
         self.ed.setTextCursor(cursor)

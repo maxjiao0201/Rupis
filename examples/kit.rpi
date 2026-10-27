@@ -1,0 +1,56 @@
+// ============================================================
+// Rupis 示例：一个"零件库"脚本
+//
+// 这个文件只放 def 函数和 strudef 结构，顶层不放方块 ——
+// 被 lib 导入时，它顶层的放置指令是不会执行的。
+//
+// 别的脚本这样用它：
+//     lib kit          // 导入同目录下的 kit.rpi
+//     lib kit as k     // 换个名字
+//     lib sub/kit      // 导入子目录里的
+// ============================================================
+
+// ---- 结构：零件模板 ----
+
+// 一个中继器单元
+strudef rep_unit(facing, delay){locked=false}:{
+    rrep{facing=facing,delay=delay,locked=locked}[0,0,0]
+    rw{rsig=15}[1,0,0]
+}
+
+// 一段红石粉
+strudef wire(len){rsig=15}:{
+    rw{rsig=rsig,len=len}[0,0,0]
+}
+
+// 一个带火把的方块
+strudef lamp(rsig):{
+    rw{rsig=rsig}[0,0,0]
+    rtorch{powered=true}[0,1,0]
+}
+
+// ---- 函数：逻辑 ----
+
+// 信号每格衰减 1，最低到 0
+def decay(level):{
+    if(level <= 0):{
+        return 0
+    }
+    return level - 1
+}
+
+// 铺一排中继器
+def rep_row(n, facing):{
+    for i = (0 to n-1):{
+        stru rep_unit(facing, 1){}[i,0,0]
+    }
+    return 0
+}
+
+// 按衰减值铺一排红石粉
+def wire_row(n, level):{
+    for i = (0 to n-1):{
+        stru wire(1){rsig=level}[i,0,0]
+    }
+    return 0
+}

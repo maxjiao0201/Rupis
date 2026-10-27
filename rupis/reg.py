@@ -10,6 +10,36 @@ display_name = "Rupis脚本文件"
 icon_filename = "rupis.ico"
 # ==========================================================
 
+def is_frozen() -> bool:
+    """是不是打包成 exe 之后在跑（PyInstaller 会设这个属性）。"""
+
+    return bool(getattr(sys, "frozen", False))
+
+
+def open_command() -> str:
+    """双击 .rpi 时要执行的命令。
+
+    打包成 exe 时，sys.executable 就是 rupis.exe 自己；
+    直接跑源码时是 python + main.py。
+    """
+
+    if is_frozen():
+        return f'"{sys.executable}" "%1"'
+    script_dir = os.path.abspath(os.path.dirname(__file__))   # ...\Rupis\rupis
+    root_dir = os.path.dirname(script_dir)                      # ...\Rupis
+    main_py = os.path.join(root_dir, "main.py")
+    return f'"{sys.executable}" "{main_py}" "%1"'
+
+
+def icon_path() -> str:
+    """.rpi 文件的图标。打包后图标就在 exe 里。"""
+
+    if is_frozen():
+        return f"{sys.executable},0"
+    script_dir = os.path.abspath(os.path.dirname(__file__))
+    return os.path.join(script_dir, icon_filename) + ",0"
+
+
 def _restart_explorer():
     """重启Windows资源管理器，刷新文件类型显示"""
     try:
@@ -21,13 +51,9 @@ def _restart_explorer():
 
 
 def init():
-    """注册 .rpi 文件类型、图标、双击打开（当前用户，无需管理员）"""
-    script_dir = os.path.abspath(os.path.dirname(__file__))   # ...\Rupis\rupis
-    root_dir = os.path.dirname(script_dir)                      # ...\Rupis
-    icon_path = os.path.join(script_dir, icon_filename) + ",0"  # 图标在 rupis/ 下
-    python_exe = sys.executable
-    main_py = os.path.join(root_dir, "main.py")
-    open_cmd = f'"{python_exe}" "{main_py}" "%1"'
+    """注册 .rpi 文件类型、图标、双击打开"""
+    icon = icon_path()
+    open_cmd = open_command()
 
     print("正在初始化Rupis解释器,请稍后......")
 
@@ -45,7 +71,7 @@ def init():
 
         # 3. 设置图标 DefaultIcon
         with winreg.CreateKey(hkcu, f"{base}\\{progid}\\DefaultIcon") as key:
-            winreg.SetValue(key, "", winreg.REG_SZ, icon_path)
+            winreg.SetValue(key, "", winreg.REG_SZ, icon)
 
         # 4. 双击打开命令
         with winreg.CreateKey(hkcu, f"{base}\\{progid}\\shell\\open\\command") as key:

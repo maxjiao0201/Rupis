@@ -65,11 +65,13 @@ class Job(QtCore.QThread):
     ok = QtCore.pyqtSignal(str)
     bad = QtCore.pyqtSignal(str, int, int)
 
-    def __init__(self, text: str, filename: str, mode: str, parent=None) -> None:
+    def __init__(self, text: str, filename: str, mode: str, parent=None,
+                 lib_paths=None) -> None:
         super().__init__(parent)
         self.text = text
         self.filename = filename
         self.mode = mode
+        self.lib_paths = list(lib_paths or [])
 
     def run(self) -> None:  # noqa: D102
         try:
@@ -77,7 +79,8 @@ class Job(QtCore.QThread):
                 compile_source(self.text, self.filename)
                 self.ok.emit("语法检查通过。")
                 return
-            interpreter = run_source(self.text, self.filename)
+            interpreter = run_source(self.text, self.filename,
+                                     lib_paths=self.lib_paths)
             summary = exporters.summary(interpreter.world)
             commands = exporters.export_commands(interpreter.world)
             self.ok.emit(summary + "\n\n" + commands)
@@ -123,6 +126,9 @@ class RupisIDE(QtWidgets.QMainWindow):
 
         # 终端的工作目录跟着 IDE 的工作路径走
         self._sync_terminal_cwd()
+
+        # lib 导入 .rpi 脚本时搜索的目录
+        self._sync_lib_paths()
 
         if path:
             self.open_file(path)
@@ -591,6 +597,7 @@ class RupisIDE(QtWidgets.QMainWindow):
             self._settings.setValue("folder", str(self.folder))
             self._refresh_file_list()
             self._sync_terminal_cwd()
+            self._sync_lib_paths()
 
     def open_file(self, path) -> None:
         if not path:
@@ -622,6 +629,7 @@ class RupisIDE(QtWidgets.QMainWindow):
             self._sync_terminal_cwd()
         else:
             self._highlight_current_file()
+        self._sync_lib_paths()
 
     def save_file(self) -> bool:
         if self.current_path is None:
@@ -747,6 +755,26 @@ class RupisIDE(QtWidgets.QMainWindow):
         self.terminal.set_script_dir(self.folder)
 
     # ================================================================ 运行
+    def _lib_search_dirs(self) -> List[Path]:
+        """lib 导入 .rpi 脚本时搜索的目录。
+
+        当前脚本所在的文件夹优先，然后是 IDE 打开的文件夹。
+        """
+
+        dirs: List[Path] = []
+        if self.current_path is not None:
+            dirs.append(self.current_path.parent)
+        if self.folder is not None and self.folder not in dirs:
+            dirs.append(self.folder)
+        return [item for item in dirs if item.is_dir()]
+
+    def _sync_lib_paths(self) -> None:
+        """把 lib 的搜索目录同步给编辑器和控制台。"""
+
+        dirs = self._lib_search_dirs()
+        self.editor.set_lib_paths(dirs)
+        self.console_panel.interpreter.lib_paths = list(dirs)
+
     def _start_job(self, mode: str) -> None:
         if self._job is not None and self._job.isRunning():
             self.lbl_msg.setText("上一个任务还在跑…")
@@ -759,7 +787,7 @@ class RupisIDE(QtWidgets.QMainWindow):
         self.act_check.setEnabled(False)
         self.act_export.setEnabled(False)
 
-        self._job = Job(text, filename, mode, self)
+        self._job = Job(text, filename, mode, self, lib_paths=self._lib_search_dirs())
         self._job.ok.connect(self._on_job_ok)
         self._job.bad.connect(self._on_job_bad)
         self._job.finished.connect(self._on_job_finished)

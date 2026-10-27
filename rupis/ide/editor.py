@@ -8,9 +8,11 @@ QPlainTextEdit 子类，左侧自己画行号（经典的 LineNumberArea 做法�
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from ..interpreter import import_dotted
+from .. import compile_source
+from ..ast_nodes import FuncDef, StructDef
 from .highlighter import RupisHighlighter, completion_words
 from .qtcompat import QtCore, QtGui, QtWidgets
 from .syntax import (ELEMENTS, ELEMENT_STATES, describe, describe_state_key,
@@ -23,12 +25,13 @@ WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DEF_RE = re.compile(r"^\s*(?:strudef|def)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 STRUCT_RE = re.compile(r"^\s*strudef\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 FUNC_RE = re.compile(r"^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
-# lib 模块名 [as 别名]
+# lib 脚本名 [as 别名] —— 脚本名里可以用 / 指子目录
 LIB_RE = re.compile(
-    r"^\s*lib\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;?\s*$",
+    r"^\s*lib\s+([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;?\s*$",
     re.MULTILINE,
 )
-# 光标前面的 点号链.半截词  —— 用来做模块成员补全
+# 光标前面的 点号链.半截词  —— 用来做脚本成员补全
 MEMBER_RE = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\.([A-Za-z0-9_]*)$"
 )
@@ -482,6 +485,9 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         """扫描脚本里的结构名 / 函数名，加进补全词表。"""
         text = self.toPlainText()
         names = sorted(set(DEF_RE.findall(text)))
+        # lib 导入的脚本里的名字也能直接补出来
+        for path in self._lib_files().values():
+            names.extend(self._script_members(path))
         words = sorted(set(self._base_words) | set(names))
         model = self._completer.model()
         if isinstance(model, QtCore.QStringListModel):
@@ -491,25 +497,59 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     _base_words: List[str] = []
 
-    def _lib_bindings(self) -> Dict[str, str]:
-        """扫描脚本里的 lib 语句：绑定的名字 → 模块路径。
+    # ------------------------------------------------------------ lib 导入
+    def set_lib_paths(self, paths: List[Path]) -> None:
+        """设置 lib 找 .rpi 脚本时搜索的目录。"""
 
-        和 Python 的 import 语义一致：``lib os.path`` 绑的是顶层包 ``os``，
-        ``lib os.path as p`` 绑的才是整个 ``os.path``。
+        self._lib_paths = [Path(item) for item in paths]
+
+    _lib_paths: List[Path] = []
+
+    def _find_lib_file(self, script: str) -> Optional[Path]:
+        """按名字找 .rpi 脚本（跟解释器的搜索顺序一致）。"""
+
+        relative = Path(*script.split("/")) if script else Path()
+        for folder in self._lib_paths:
+            candidate = folder / relative
+            if candidate.suffix != ".rpi":
+                candidate = candidate.with_suffix(".rpi")
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _lib_files(self) -> Dict[str, Path]:
+        """扫描脚本里的 lib 语句：绑定的名字 → .rpi 文件路径。
+
+        ``lib util`` 绑的是 util，``lib util as u`` 绑的是 u，
+        ``lib sub/util`` 绑的是 util。
         """
 
-        bindings: Dict[str, str] = {}
+        found: Dict[str, Path] = {}
         for match in LIB_RE.finditer(self.toPlainText()):
-            module = match.group(1)
+            script = match.group(1)
             alias = match.group(2)
-            top = module.split(".")[0]
-            bindings[top] = top
-            if alias:
-                bindings[alias] = module
-        return bindings
+            name = alias or script.rsplit("/", 1)[-1]
+            path = self._find_lib_file(script)
+            if path is not None:
+                found[name] = path
+        return found
+
+    def _script_members(self, path: Path) -> List[str]:
+        """读一个 .rpi 脚本，返回它里面的函数名和结构名。"""
+
+        try:
+            text = path.read_text(encoding="utf-8")
+            program, _source = compile_source(text, str(path))
+        except Exception:
+            return []
+        names: List[str] = []
+        for item in program:
+            if isinstance(item, (FuncDef, StructDef)):
+                names.append(item.name)
+        return sorted(set(names))
 
     def _member_completion(self) -> Optional[Tuple[List[str], str]]:
-        """光标前面是 ``模块名.`` 时，补全这个模块的成员。
+        """光标前面是 ``脚本名.`` 时，补全这个脚本里的成员。
 
         返回 (候选词表, 已输入的前缀)；不适用时返回 None。
         """
@@ -521,17 +561,13 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
             return None
         chain, prefix = match.group(1), match.group(2)
         parts = chain.split(".")
-        path = self._lib_bindings().get(parts[0])
-        if not path:
+        if len(parts) > 1:
+            # 导入的脚本没有二级命名空间
             return None
-        try:
-            module = import_dotted(path)
-            for part in parts[1:]:
-                module = getattr(module, part)
-        except Exception:
-            # 模块没装 / 成员不存在 —— 这时候就别打扰用户了
+        path = self._lib_files().get(parts[0])
+        if path is None:
             return None
-        members = sorted(name for name in dir(module) if not name.startswith("_"))
+        members = self._script_members(path)
         if not members:
             return None
         return members, prefix

@@ -31,9 +31,9 @@ ELEMENTS: Set[str] = {
 # 每个元件可用的状态键（用于补全与提示）
 ELEMENT_STATES: Dict[str, List[str]] = {
     "rw": ["rsig", "len", "axis"],
-    "rrep": ["facing", "delay", "locked", "powered"],
+    "rrep": ["facing", "delay", "locked"],
     "rco": ["facing", "mode", "powered"],
-    "obs": ["facing", "powered"],
+    "obs": ["facing"],
     "rtorch": ["powered"],
     "rlamp": ["powered"],
     "piston": ["facing", "extended"],
@@ -47,7 +47,7 @@ HINTS: Dict[str, str] = {
     # 声明
     "dpos": "dpos 名称[x,y,z] —— 声明 / 覆盖一个坐标变量",
     "drp": "drp 名称{键=值} —— 声明 / 覆盖一个状态模板变量",
-    "lib": "lib 模块名 [as 别名] —— 导入一个 Python 模块，之后用 模块名.成员(...) 调用",
+    "lib": "lib 脚本名 [as 别名] —— 导入另一个 .rpi 脚本，之后用 脚本名.成员(...) 调用",
     # 结构与函数
     "stru": "stru 结构名(参数){覆盖状态}[坐标] —— 实例化一个结构模板",
     "strudef": "strudef 结构名(参数){默认状态}:{...} —— 定义方块模板",
@@ -64,7 +64,7 @@ HINTS: Dict[str, str] = {
     "continue": "continue —— 跳过本轮循环",
     # 元件
     "rw": "红石粉（redstone_wire）—— 状态键：rsig / len / axis",
-    "rrep": "红石中继器（repeater）—— 状态键：facing / delay / locked / powered",
+    "rrep": "红石中继器（repeater）—— 状态键：facing / delay / locked",
     "rco": "红石比较器（comparator）—— 状态键：facing / mode / powered",
     "obs": "侦测器（observer）—— 状态键：facing / powered",
     "rtorch": "红石火把（redstone_torch）—— 状态键：powered",

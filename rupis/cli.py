@@ -12,8 +12,6 @@ import os
 from pathlib import Path
 
 
-from . import reg
-from . import path
 from . import RupisError, compile_source, run_source
 from . import exporters
 
@@ -78,10 +76,25 @@ def main(argv=None) -> int:
         installed = FLAG_PATH.read_text(encoding="utf-8").strip() == "1"
 
     if not installed:
-        reg.init()
-        path.add_folder_to_user_environment()
-        _FLAG_DIR.mkdir(parents=True, exist_ok=True)
-        FLAG_PATH.write_text("1", encoding="utf-8")
+        # 首次运行：注册 .rpi 文件类型（双击 .rpi 用 Rupis 打开）
+        # 这块只有 Windows 有用，所以放到函数里 import
+        try:
+            from . import reg
+
+            reg.init()
+            # 跑源码时才需要把目录加进 PATH；打包成 exe 就不用了
+            if not getattr(sys, "frozen", False):
+                from . import path
+
+                path.add_folder_to_user_environment()
+        except Exception as exc:
+            # 注册失败不影响使用，只是双击不会自动用 Rupis 打开
+            print(f"（文件关联注册失败，不影响使用：{exc}）")
+        try:
+            _FLAG_DIR.mkdir(parents=True, exist_ok=True)
+            FLAG_PATH.write_text("1", encoding="utf-8")
+        except OSError:
+            pass
 
     # Windows 控制台默认是 GBK，这里强制用 UTF-8 输出中文报错信息
     for stream in (sys.stdout, sys.stderr):

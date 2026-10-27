@@ -165,16 +165,20 @@ class ExprStmt(Stmt):
 
 @dataclass
 class LibStmt(Stmt):
-    """导入一个 Python 模块：lib 模块名 [as 别名]
+    """导入一个 .rpi 脚本：lib 脚本名 [as 别名]
 
-    对应 Python 的 import：
-        lib math         ≡ import math
-        lib math as m    ≡ import math as m
-        lib os.path      ≡ import os.path      （绑定的是顶层包 os）
+    导入的是别的 Rupis 脚本，不是 Python 模块：
+        lib util          导入 util.rpi
+        lib util as u     还是 util.rpi，但绑成 u
+        lib sub/util      导入子目录里的 util.rpi
+
+    导入后会得到两样东西：
+        1. 一个命名空间对象（util / u），用 util.函数(...) 调
+        2. 脚本里的 def / strudef 直接按原名出现在当前脚本里
     """
 
-    module: str = ""      # 完整模块名，如 "os.path"
-    name: str = ""        # 绑定到作用域里的名字
+    script: str = ""      # 要导入的脚本名，如 "util" 或 "sub/util"
+    name: str = ""        # 绑定到作用域里的命名空间名字
     alias: str = ""       # 写了 as 时的别名（没写就是空）
 
 

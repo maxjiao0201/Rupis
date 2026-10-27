@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .ast_nodes import (
@@ -34,6 +35,8 @@ from .blocks import (
     normalize_block_id, resolve_rbl,
 )
 from .errors import RupisError, RuntimeErr, Source
+from .lexer import Lexer
+from .parser import Parser
 
 MAX_CALL_DEPTH = 256
 MAX_LOOP_ITERATIONS = 1_000_000
@@ -83,6 +86,64 @@ def fmt_state(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
+
+
+# ----------------------------------------------------------------- 导入的 .rpi 脚本
+class ModuleFunction:
+    """被导入脚本里的一个 def 函数，包一层就能直接调用。"""
+
+    def __init__(self, interp: "Interpreter", func: FuncDef) -> None:
+        self.interp = interp
+        self.func = func
+        self.name = func.name
+        self.params = list(func.params)
+
+    def __call__(self, *args: Any) -> Any:
+        return self.interp.invoke_function(self.func, args)
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<函数 {self.name}/{len(self.params)}>"
+
+
+class RupisModule:
+    """lib 导入进来的 .rpi 脚本，充当一个命名空间。
+
+    成员有两种：
+        * def 函数     → 直接调用：util.helper(3)
+        * strudef 结构 → 用 stru util.my_struct(...) 实例化
+    """
+
+    def __init__(
+        self,
+        name: str,
+        path: Path,
+        functions: Dict[str, FuncDef],
+        structs: Dict[str, StructDef],
+        interp: "Interpreter",
+    ) -> None:
+        self.name = name
+        self.path = path
+        self.functions = functions
+        self.structs = structs
+        self.interp = interp
+        self._callables = {
+            key: ModuleFunction(interp, func) for key, func in functions.items()
+        }
+
+    def __getattr__(self, item: str) -> Any:
+        # 只有正常属性找不到时才会走到这里
+        callables = self.__dict__.get("_callables") or {}
+        if item in callables:
+            return callables[item]
+        raise AttributeError(item)
+
+    def member_names(self) -> List[str]:
+        """这个脚本里能拿到的所有名字（函数 + 结构）。"""
+
+        return sorted(set(self.functions) | set(self.structs))
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<脚本 {self.name}（{self.path}）>"
 
 
 # ------------------------------------------------------------------------ 作用域
@@ -151,7 +212,12 @@ class Scope:
 
 # ----------------------------------------------------------------------- 解释器
 class Interpreter:
-    def __init__(self, source: Optional[Source] = None, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        source: Optional[Source] = None,
+        verbose: bool = False,
+        lib_paths: Optional[List[Any]] = None,
+    ) -> None:
         self.source = source
         self.verbose = verbose
         self.world: Dict[Coord3, Placement] = {}
@@ -164,6 +230,8 @@ class Interpreter:
         self.drp_vars: Dict[str, Any] = {}
         self.global_scope = Scope()
         self.call_depth = 0
+        # lib 导入 .rpi 脚本时额外要搜的目录
+        self.lib_paths: List[Path] = [Path(item) for item in (lib_paths or [])]
 
     # ------------------------------------------------------------------ 工具
     def error(self, message: str, node: Any = None) -> RuntimeErr:
@@ -204,27 +272,79 @@ class Interpreter:
             self.drp_vars[stmt.name] = dict(stmt.states or {})
 
     def _exec_LibStmt(self, stmt: LibStmt, scope: Scope) -> None:
-        """导入一个 Python 模块：lib 模块名 [as 别名]
+        """导入一个 .rpi 脚本：lib 脚本名 [as 别名]
 
-        对应 Python 的 import，模块对象绑到 scope 里，之后就能写
-        math.sqrt(4) 这样的表达式。
+        导入的是别的 Rupis 脚本（不是 Python 模块），拿到它里面的
+        def 函数和 strudef 结构：
+            1. 原名直接可用：helper(...) / stru my_struct(...)
+            2. 命名空间也绑上：util.helper(...) / stru util.my_struct(...)
+        被导入脚本顶层的放置指令不执行 —— 它只是个库。
         """
 
+        path = self.find_lib_file(stmt.script)
+        if path is None:
+            searched = "、".join(str(item) for item in self.lib_search_dirs())
+            raise self.error(
+                f"找不到脚本 '{stmt.script}.rpi'（找过的目录：{searched}）", stmt)
+
         try:
-            if stmt.alias:
-                # 写了别名：整个点号路径都解析出来（import os.path as p）
-                module = import_dotted(stmt.module)
-            else:
-                # 没写别名：和 Python 一样绑定顶层包（import os.path 绑的是 os）
-                module = importlib.import_module(stmt.module.split(".")[0])
-        except ModuleNotFoundError as exc:
-            missing = getattr(exc, "name", None) or stmt.module
-            raise self.error(f"找不到 Python 模块 '{missing}'", stmt)
-        except ImportError as exc:
-            raise self.error(f"导入 '{stmt.module}' 失败：{exc}", stmt)
-        except Exception as exc:
-            raise self.error(f"导入 '{stmt.module}' 时出错：{exc}", stmt)
-        scope.set(stmt.name, module)
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise self.error(f"读不了 '{path}'：{exc}", stmt)
+
+        try:
+            lexer = Lexer(text, str(path))
+            program = Parser(lexer.tokenize(), lexer.source).parse_program()
+        except RupisError as exc:
+            raise self.error(f"导入 '{path.name}' 失败：{exc.message}", stmt)
+
+        functions: Dict[str, FuncDef] = {}
+        structs: Dict[str, StructDef] = {}
+        for item in program:
+            if isinstance(item, FuncDef):
+                functions[item.name] = item
+            elif isinstance(item, StructDef):
+                structs[item.name] = item
+
+        # 原名直接可用（同名的以后来导入的为准）
+        self.functions.update(functions)
+        self.structs.update(structs)
+
+        # 命名空间
+        scope.set(stmt.name, RupisModule(stmt.name, path, functions, structs, self))
+
+    def lib_search_dirs(self) -> List[Path]:
+        """lib 找 .rpi 脚本时会搜的目录（按顺序）。"""
+
+        dirs: List[Path] = []
+        if self.source is not None and self.source.filename:
+            base = Path(self.source.filename).parent
+            if str(base) and not base.is_absolute():
+                base = base.resolve()
+            dirs.append(base)
+        dirs.extend(self.lib_paths)
+        dirs.append(Path.cwd())
+        # 去重但保持顺序
+        seen = set()
+        unique: List[Path] = []
+        for item in dirs:
+            key = str(item)
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+        return unique
+
+    def find_lib_file(self, script: str) -> Optional[Path]:
+        """按名字找 .rpi 脚本：先找当前脚本所在的目录，再找 lib 目录、当前目录。"""
+
+        relative = Path(*script.split("/")) if script else Path()
+        for folder in self.lib_search_dirs():
+            candidate = folder / relative
+            if candidate.suffix != ".rpi":
+                candidate = candidate.with_suffix(".rpi")
+            if candidate.is_file():
+                return candidate
+        return None
 
     def lookup_dpos_var(self, name: str, node: Any) -> Coord3:
         if name not in self.dpos_vars:
@@ -342,10 +462,28 @@ class Interpreter:
     def _exec_StructDef(self, stmt: StructDef, scope: Scope) -> None:
         self.structs[stmt.name] = stmt
 
-    def _exec_StructCall(self, stmt: StructCall, scope: Scope) -> None:
-        struct = self.structs.get(stmt.name)
+    def lookup_struct(self, name: str, scope: Scope, node: Any) -> StructDef:
+        """找结构定义。既支持本脚本的结构，也支持 lib 导入的：模块.结构名。"""
+
+        if "." not in name:
+            struct = self.structs.get(name)
+            if struct is None:
+                raise self.error(f"未定义的结构 '{name}'", node)
+            return struct
+
+        head, tail = name.split(".", 1)
+        if not scope.has(head):
+            raise self.error(f"未定义的模块 '{head}'", node)
+        module = scope.get(head)
+        if not isinstance(module, RupisModule):
+            raise self.error(f"'{head}' 不是导入的脚本", node)
+        struct = module.structs.get(tail)
         if struct is None:
-            raise self.error(f"未定义的结构 '{stmt.name}'", stmt)
+            raise self.error(f"脚本 '{head}' 里没有结构 '{tail}'", node)
+        return struct
+
+    def _exec_StructCall(self, stmt: StructCall, scope: Scope) -> None:
+        struct = self.lookup_struct(stmt.name, scope, stmt)
 
         if stmt.kwargs:
             raise self.error(f"结构 '{stmt.name}' 不支持关键字参数", stmt)
@@ -720,12 +858,19 @@ class Interpreter:
         raise self.error(f"未定义的变量 '{name}'", expr)
 
     def eval_attr(self, expr: Attr, scope: Scope) -> Any:
-        """取属性：模块.成员（lib 导入的模块就靠这个用）"""
+        """取属性：脚本.成员（lib 导入的脚本就靠这个用）"""
 
         obj = self.eval_expr(expr.value, scope)
         try:
             return getattr(obj, expr.name)
         except AttributeError:
+            if isinstance(obj, RupisModule):
+                if expr.name in obj.structs:
+                    raise self.error(
+                        f"结构 '{expr.name}' 要用 stru {obj.name}.{expr.name}(...) 来实例化", expr)
+                known = "、".join(obj.member_names()) or "（空）"
+                raise self.error(
+                    f"脚本 '{obj.name}' 里没有 '{expr.name}'（有：{known}）", expr)
             raise self.error(
                 f"{describe_object(obj)} 没有属性 '{expr.name}'", expr)
 
@@ -769,25 +914,41 @@ class Interpreter:
 
     # ----------------------------------------------------------------- 函数
     def call_function(self, expr: Call, scope: Scope) -> Any:
-        # 通过表达式调用：多半是 lib 导入的模块里的函数
+        # 通过表达式调用：多半是 lib 导入的脚本里的函数
         if expr.func is not None:
             return self.call_value(expr, scope)
         func = self.functions.get(expr.name)
         if func is None:
             raise self.error(f"未定义的函数 '{expr.name}'", expr)
-        if expr.kwargs:
-            raise self.error(f"函数 '{expr.name}' 不支持关键字参数", expr)
         args = [self.eval_expr(arg, scope) for arg in expr.args]
+        return self.invoke_function(func, args, expr, kwargs=expr.kwargs,
+                                    origin=scope.find_origin())
+
+    def invoke_function(
+        self,
+        func: FuncDef,
+        args: List[Any],
+        node: Any = None,
+        kwargs: Optional[Dict[str, Any]] = None,
+        origin: Optional[Coord3] = None,
+    ) -> Any:
+        """真正去执行一个 def 函数的函数体。
+
+        本脚本的函数、lib 导入的脚本里的函数，走的都是这一条路。
+        """
+
+        if kwargs:
+            raise self.error(f"函数 '{func.name}' 不支持关键字参数", node)
         if len(args) != len(func.params):
             raise self.error(
-                f"函数 '{expr.name}' 需要 {len(func.params)} 个参数，实际传入 {len(args)} 个", expr
+                f"函数 '{func.name}' 需要 {len(func.params)} 个参数，实际传入 {len(args)} 个", node
             )
         if self.call_depth >= MAX_CALL_DEPTH:
-            raise self.error(f"函数调用层数过深（可能存在无限递归）", expr)
+            raise self.error("函数调用层数过深（可能存在无限递归）", node)
 
         func_scope = Scope(
             parent=self.global_scope,
-            origin=scope.find_origin(),
+            origin=origin,
         )
         for name, value in zip(func.params, args):
             func_scope.set(name, value)
@@ -804,7 +965,7 @@ class Interpreter:
     def call_value(self, expr: Call, scope: Scope) -> Any:
         """调用一个表达式算出来的可调用对象。
 
-        lib 导入的模块就靠这条路用：lib math 之后写 math.sqrt(4)。
+        lib 导入的脚本就靠这条路用：lib util 之后写 util.helper(3)。
         """
         callee = self.eval_expr(expr.func, scope)
         if not callable(callee):
@@ -824,10 +985,13 @@ class Interpreter:
 
 # ------------------------------------------------------------------ 取值辅助
 def import_dotted(dotted: str) -> Any:
-    """按点号路径导入：os.path → 先 import os，再取 os.path。
+    """按点号路径导入 Python 模块：os.path → 先 import os，再取 os.path。
 
     不用 importlib.import_module("os.path")，因为路径最后一段未必是模块
     （math.sqrt 是个函数，import_module 会直接报找不到模块）。
+
+    注意：lib 语句现在导入的是 .rpi 脚本，不再用得上这个函数。
+    它保留在这里，供将来做"从 Python 侧调用 Rupis"之类的高级用法。
     """
     parts = dotted.split(".")
     obj = importlib.import_module(parts[0])
@@ -838,6 +1002,8 @@ def import_dotted(dotted: str) -> Any:
 
 def describe_object(obj: Any) -> str:
     """给对象起个能看懂的名字，报错时用。"""
+    if isinstance(obj, RupisModule):
+        return f"脚本 '{obj.name}'"
     if isinstance(obj, type(sys)):
         return f"模块 '{getattr(obj, '__name__', obj)}'"
     return f"'{type(obj).__name__}' 对象"

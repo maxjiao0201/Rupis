@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -503,68 +505,155 @@ def read_nbt(data: bytes):
 
 
 class TestLib(unittest.TestCase):
-    """lib 语句：导入 Python 模块。"""
+    """lib 语句：导入另一个 .rpi 脚本。"""
 
-    def test_import_and_call(self):
-        interp = run("lib math\nlet x = math.sqrt(16)\nrw{rsig=1}[x,0,0]")
-        self.assertIsNotNone(state_at(interp.world, 4, 0, 0))
+    UTIL = (
+        "def helper(n):{\n"
+        "    return n * 2\n"
+        "}\n"
+        "\n"
+        "def twice(n):{\n"
+        "    return helper(n)\n"
+        "}\n"
+        "\n"
+        "strudef box(v):{\n"
+        "    rw{rsig=v}[0,0,0]\n"
+        "}\n"
+        "\n"
+        "rw{rsig=99}[50,50,50]\n"
+    )
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
+        self.write("util.rpi", self.UTIL)
+
+    def write(self, name, text):
+        path = os.path.join(self._tmp, *name.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        return path
+
+    def run_main(self, code, name="main.rpi", lib_paths=None):
+        path = os.path.join(self._tmp, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(code)
+        return run_source(code, path, lib_paths=lib_paths)
+
+    # ------------------------------------------------------------ 导入
+    def test_import_and_call_by_name(self):
+        """导入进来的函数直接按原名用。"""
+        interp = self.run_main("lib util\nrw{rsig=helper(3)}[0,0,0]")
+        block = state_at(interp.world, 0, 0, 0)
+        self.assertIsNotNone(block)
+        self.assertEqual(block.states["power"], 6)
+
+    def test_import_and_call_by_namespace(self):
+        """也能用 脚本名.函数(...) 调。"""
+        interp = self.run_main("lib util\nrw{rsig=util.helper(3)}[0,0,0]")
+        block = state_at(interp.world, 0, 0, 0)
+        self.assertIsNotNone(block)
+        self.assertEqual(block.states["power"], 6)
 
     def test_import_with_alias(self):
-        interp = run("lib math as m\nlet x = m.floor(2.5)\nrw{rsig=1}[x,0,0]")
-        self.assertIsNotNone(state_at(interp.world, 2, 0, 0))
-
-    def test_dotted_module_binds_top_level(self):
-        """import os.path 绑的是 os —— 和 Python 一个规矩。"""
-        interp = run("lib os.path\nlet n = os.path.basename(\"a/b.txt\")\nrw{rsig=1}[0,0,0]")
-        self.assertIsNotNone(state_at(interp.world, 0, 0, 0))
-
-    def test_dotted_module_with_alias(self):
-        interp = run("lib os.path as p\nlet n = p.basename(\"a/b.txt\")\nrw{rsig=1}[0,0,0]")
-        self.assertIsNotNone(state_at(interp.world, 0, 0, 0))
-
-    def test_module_attribute_is_not_a_call(self):
-        interp = run("lib math\nlet p = math.pi\nrw{rsig=1}[0,0,0]")
-        self.assertIsNotNone(state_at(interp.world, 0, 0, 0))
-
-    def test_keyword_arguments(self):
-        interp = run("lib textwrap\nlet v = textwrap.wrap(\"hello world\", width=5)\nrw{rsig=1}[0,0,0]")
-        self.assertIsNotNone(state_at(interp.world, 0, 0, 0))
-
-    def test_call_inside_function(self):
-        interp = run(
-            "lib math\n"
-            "def f(n){ return math.floor(n) }\n"
-            "rw{rsig=f(2.5)}[0,0,0]\n"
-        )
+        interp = self.run_main("lib util as u\nrw{rsig=u.helper(3)}[0,0,0]")
         block = state_at(interp.world, 0, 0, 0)
         self.assertIsNotNone(block)
-        self.assertEqual(block.states["power"], 2)
+        self.assertEqual(block.states["power"], 6)
 
-    def test_call_in_state_value(self):
-        interp = run("lib math\nrw{rsig=math.floor(3.7)}[0,0,0]")
+    def test_alias_keeps_direct_names(self):
+        """写了 as 也照样能直接按原名调。"""
+        interp = self.run_main("lib util as u\nrw{rsig=helper(3)}[0,0,0]")
         block = state_at(interp.world, 0, 0, 0)
         self.assertIsNotNone(block)
-        self.assertEqual(block.states["power"], 3)
+        self.assertEqual(block.states["power"], 6)
 
-    def test_module_not_found(self):
-        with self.assertRaises(RupisError) as ctx:
-            run("lib nosuchmodule_xyz")
-        self.assertIn("找不到 Python 模块", ctx.exception.message)
+    def test_structure_by_namespace(self):
+        interp = self.run_main("lib util\nstru util.box(15)[1,0,0]")
+        block = state_at(interp.world, 1, 0, 0)
+        self.assertIsNotNone(block)
+        self.assertEqual(block.states["power"], 15)
 
-    def test_missing_attribute(self):
-        with self.assertRaises(RupisError) as ctx:
-            run("lib math\nlet a = math.nosuchfunction(1)")
-        self.assertIn("没有属性", ctx.exception.message)
+    def test_structure_by_name(self):
+        interp = self.run_main("lib util\nstru box(13)[2,0,0]")
+        block = state_at(interp.world, 2, 0, 0)
+        self.assertIsNotNone(block)
+        self.assertEqual(block.states["power"], 13)
 
-    def test_not_callable(self):
-        with self.assertRaises(RupisError) as ctx:
-            run("lib math\nlet a = math.pi(1)")
-        self.assertIn("不是可调用的", ctx.exception.message)
+    def test_function_in_module_can_call_sibling(self):
+        """导入的脚本里，函数之间能互相调用。"""
+        interp = self.run_main("lib util\nrw{rsig=twice(5)}[0,0,0]")
+        block = state_at(interp.world, 0, 0, 0)
+        self.assertIsNotNone(block)
+        self.assertEqual(block.states["power"], 10)
 
-    def test_wrong_argument_type(self):
+    def test_top_level_placements_are_not_executed(self):
+        """被导入的脚本只是个库，顶层放的方块不执行。"""
+        interp = self.run_main("lib util\nrw{rsig=1}[0,0,0]")
+        self.assertIsNone(state_at(interp.world, 50, 50, 50))
+
+    def test_import_from_subdirectory(self):
+        self.write("sub/deep.rpi", "def helper(n):{\n    return n + 1\n}\n")
+        interp = self.run_main("lib sub/deep\nrw{rsig=deep.helper(4)}[0,0,0]")
+        block = state_at(interp.world, 0, 0, 0)
+        self.assertIsNotNone(block)
+        self.assertEqual(block.states["power"], 5)
+
+    def test_import_from_lib_paths(self):
+        """当前目录找不到时，去 lib_paths 里找。"""
+        other = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, other, ignore_errors=True)
+        with open(os.path.join(other, "far.rpi"), "w", encoding="utf-8") as handle:
+            handle.write("def helper(n):{\n    return n * 3\n}\n")
+        interp = self.run_main("lib far\nrw{rsig=far.helper(2)}[0,0,0]",
+                              lib_paths=[other])
+        block = state_at(interp.world, 0, 0, 0)
+        self.assertIsNotNone(block)
+        self.assertEqual(block.states["power"], 6)
+
+    # ------------------------------------------------------------ 报错
+    def test_script_not_found(self):
         with self.assertRaises(RupisError) as ctx:
-            run("lib math\nlet a = math.sqrt(\"x\")")
-        self.assertIn("调用", ctx.exception.message)
+            self.run_main("lib nosuchscript_xyz")
+        self.assertIn("找不到脚本", ctx.exception.message)
+
+    def test_missing_member(self):
+        with self.assertRaises(RupisError) as ctx:
+            self.run_main("lib util\nlet a = util.nosuchfunction(1)")
+        self.assertIn("没有", ctx.exception.message)
+
+    def test_structure_needs_stru(self):
+        with self.assertRaises(RupisError) as ctx:
+            self.run_main("lib util\nlet a = util.box")
+        self.assertIn("stru", ctx.exception.message)
+
+    def test_unknown_module_in_stru(self):
+        with self.assertRaises(RupisError) as ctx:
+            self.run_main("stru nosuch.box(1)[0,0,0]")
+        self.assertIn("未定义的模块", ctx.exception.message)
+
+    def test_wrong_argument_count(self):
+        with self.assertRaises(RupisError) as ctx:
+            self.run_main("lib util\nrw{rsig=helper(1,2)}[0,0,0]")
+        self.assertIn("参数", ctx.exception.message)
+
+    def test_broken_imported_script(self):
+        self.write("bad.rpi", "def f(:{\n")
+        with self.assertRaises(RupisError) as ctx:
+            self.run_main("lib bad")
+        self.assertIn("失败", ctx.exception.message)
+
+    def test_lib_needs_a_script_name(self):
+        with self.assertRaises(RupisError):
+            run("lib")
+
+    def test_lib_inside_function_is_local(self):
+        """函数里 lib 的命名空间是局部的。"""
+        with self.assertRaises(RupisError) as ctx:
+            self.run_main("def f(){\n  lib util\n  return 0\n}\n"
+                          "rw{rsig=util.helper(1)}[0,0,0]")
+        self.assertIn("未定义的变量", ctx.exception.message)
 
     def test_rupis_function_rejects_keyword_arguments(self):
         with self.assertRaises(RupisError) as ctx:
@@ -576,23 +665,6 @@ class TestLib(unittest.TestCase):
             run("strudef s(a):{rw{rsig=1}[a]}\nstru s(a=1)")
         self.assertIn("关键字参数", ctx.exception.message)
 
-    def test_lib_needs_a_module_name(self):
-        with self.assertRaises(RupisError):
-            run("lib")
-
-    def test_lib_inside_function_is_local(self):
-        """函数里 lib 的是局部变量，跟 Python 一样。"""
-        interp = run(
-            "def f(){\n"
-            "  lib math\n"
-            "  return math.floor(2.5)\n"
-            "}\n"
-            "rw{rsig=f()}[0,0,0]\n"
-        )
-        block = state_at(interp.world, 0, 0, 0)
-        self.assertIsNotNone(block)
-        self.assertEqual(block.states["power"], 2)
-
 
 class TestExamples(unittest.TestCase):
     """examples/ 里的示例脚本必须都能跑通。"""
@@ -603,7 +675,7 @@ class TestExamples(unittest.TestCase):
     def run_example(self, name: str):
         path = os.path.join(self.EXAMPLES, name)
         with open(path, encoding="utf-8") as handle:
-            return run_source(handle.read(), name)
+            return run_source(handle.read(), path)
 
     def test_demo_example_runs(self):
         interp = self.run_example("demo.rpi")
@@ -611,10 +683,20 @@ class TestExamples(unittest.TestCase):
 
     def test_lib_demo_example_runs(self):
         interp = self.run_example("lib_demo.rpi")
-        # 脚本里写死的那些值
-        self.assertEqual(state_at(interp.world, 100, 64, 200).states["power"], 3)
-        self.assertEqual(state_at(interp.world, 101, 64, 200).states["power"], 4)
-        self.assertEqual(state_at(interp.world, 104, 64, 200).states["power"], 9)
+        # 导入的脚本里的结构：stru rep_unit(east,2){}[base]
+        repeater = state_at(interp.world, 100, 64, 200)
+        self.assertIsNotNone(repeater)
+        self.assertEqual(repeater.block_id, "minecraft:repeater")
+        # 导入的脚本里的函数：rw{rsig=decay(14)}[base + x6]
+        self.assertEqual(state_at(interp.world, 106, 64, 200).states["power"], 13)
+        # 子目录里的脚本：rw{rsig=subkit.boost(6)}[base + x10]
+        self.assertEqual(state_at(interp.world, 110, 64, 200).states["power"], 7)
+
+    def test_imported_script_is_not_executed(self):
+        """导入的库脚本顶层的方块不该出现在世界里。"""
+        interp = self.run_example("lib_demo.rpi")
+        # kit.rpi 里没有任何顶层方块；这里确认 world 里没有多出来的东西
+        self.assertEqual(len(interp.world), 11)
 
 
 if __name__ == "__main__":

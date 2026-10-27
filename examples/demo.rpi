@@ -1,0 +1,76 @@
+// ============================================================
+// Rupis 示例脚本
+// 跑法：rupis.exe examples/demo.rpi
+//        或者在 Rupis IDE 里打开它，按 F5 运行
+// ============================================================
+
+// 全局基准（dpos / drp 都是带名字的变量）
+dpos base[100, 64, 200]
+drp default{rsig=15, powered=true}
+
+// 定义中继器单元结构
+strudef rep_unit(facing, delay){locked=false}:{
+    rrep{facing=facing,delay=delay,locked=locked}[0,0,0]
+    rw{rsig=15}[1,0,0] // rw 红石粉
+}
+
+// 定义逻辑函数：生成一排中继器链
+def rep_chain(len, f):{
+    for i = (0 to len-1):{
+        stru rep_unit(f,1){}[base + xi]
+    }
+    return 0
+}
+
+// 主代码
+rep_chain(5, east)
+
+// 单独放一条红石线
+rw{rsig=14}[base + x0,y1,z0]
+
+if(5>2):{
+    rtorch{powered=true}[base + x0,y2,z0]
+}else:{
+    rbl stone{}[base + x0,y2,z0]
+}
+
+// ------------------------------------------------------------
+// drp 变量：状态槽里写变量名
+// ------------------------------------------------------------
+
+drp high{rsig=15}
+drp low{rsig=1, powered=false}
+
+// {default} 是 drp 变量 default，坐标用 dpos 变量 base
+rw{default}[base + x20]
+
+// drp 变量也可以基于另一个 drp 变量
+drp off{low}
+rw{off}[base + x21]
+
+// ------------------------------------------------------------
+// 扩展：连续长线（len + axis）、方块、比较器
+// ------------------------------------------------------------
+
+// 4 格长的红石线，沿 X 轴
+rw{rsig=15, len=4}[base + x10]
+
+// 3 格长的红石线，沿 Z 轴
+rw{rsig=12, len=3, axis=z}[base + x10,y1]
+
+// 框架方块
+rbl stone{}[base + x0,y-1,z0]
+rbl smoothstone{}[base + x1,y-1,z0]
+
+// 原生方块（完整命名空间 ID）
+block minecraft:iron_block{}[base + x2,y-1,z0]
+
+// 比较器：减法模式，输出朝东
+rco{facing=east, mode=subtract}[base + x12,y0,z0]
+
+// 变量与循环
+// 坐标偏移里的 "xi" / "zi" 表示：该轴偏移量 = 变量 i 的值
+let cnt = 3;
+for i = (0 to cnt-1):{
+    rbl quartz{}[base + x30,y0,zi]
+}

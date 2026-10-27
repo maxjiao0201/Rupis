@@ -176,23 +176,23 @@ class Parser:
         return DposStmt(name=name_tok.value, coord=coord, line=tok.line, col=tok.col)
 
     def _parse_lib(self):
-        """解析 lib 语句：lib 模块名 [as 别名]"""
+        """解析 lib 语句：lib 脚本名 [as 别名]"""
 
         tok = self.expect_keyword("lib")
-        name_tok = self.expect_ident("模块名（例如 lib math）")
-        module = name_tok.value
-        # 支持 os.path 这样的点号模块名
-        while self.check_punct("."):
+        name_tok = self.expect_ident("脚本名（例如 lib util）")
+        script = name_tok.value
+        # 支持 lib sub/util 这样的相对路径
+        while self.check_punct("/"):
             self.advance()
-            part = self.expect_ident("模块名的一部分")
-            module += "." + part.value
+            part = self.expect_ident("脚本名的一部分")
+            script += "/" + part.value
         alias = ""
         if self.accept_ident("as"):
-            alias = self.expect_ident("别名（例如 lib math as m）").value
+            alias = self.expect_ident("别名（例如 lib util as u）").value
         self.accept_punct(";")
-        # 和 Python 的 import 一样：import os.path 绑定的是顶层包 os
-        name = alias or module.split(".")[0]
-        return LibStmt(module=module, name=name, alias=alias,
+        # 命名空间的名字：写了 as 就用别名，否则用脚本名最后一段
+        name = alias or script.rsplit("/", 1)[-1]
+        return LibStmt(script=script, name=name, alias=alias,
                        line=tok.line, col=tok.col)
 
     def _parse_drp(self):
@@ -295,13 +295,18 @@ class Parser:
     def _parse_stru_call(self):
         tok = self.expect_keyword("stru")
         name_tok = self.expect_ident("结构名")
+        name = name_tok.value
+        # 支持 stru 模块.结构名(...) —— 用 lib 导入的脚本里的结构
+        while self.check_punct("."):
+            self.advance()
+            name += "." + self.expect_ident("结构名的一部分").value
         args, kwargs = self.parse_call_args()
         override, override_ref = self.parse_state_slot()
         coord = None
         if self.check_punct("["):
             coord = self.parse_coord()
         self.accept_punct(";")
-        return StructCall(name=name_tok.value, args=args, kwargs=kwargs, override=override,
+        return StructCall(name=name, args=args, kwargs=kwargs, override=override,
                           override_ref=override_ref, coord=coord, line=tok.line, col=tok.col)
 
     def parse_param_list(self) -> List[str]:

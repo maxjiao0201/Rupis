@@ -1,0 +1,38 @@
+// ============================================================
+// Rupis 示例脚本：lib —— 导入另一个 .rpi 脚本
+// 跑法：rupis.exe examples/lib_demo.rpi
+// ============================================================
+
+// 把同目录下的 lib_kit.rpi 导入进来
+lib kit
+
+dpos base[100, 64, 200]
+
+// ---- 导入进来的结构，两种写法都行 ----
+
+// 直接按原名用
+stru rep_unit(east, 2){}[base]
+
+// 或者带命名空间
+stru kit.rep_unit(east, 2){}[base + x3]
+
+// ---- 导入进来的函数，两种写法都行 ----
+
+// 直接按原名用
+rw{rsig=decay(14)}[base + x6]
+
+// 或者带命名空间
+rw{rsig=kit.decay(12)}[base + x7]
+
+// 导入的脚本里，函数之间也能互相调用；函数本身也能当语句用
+kit.wire_row(3, 9)
+
+// ---- 换个名字导入 ----
+
+lib kit as k
+rw{rsig=k.decay(7)}[base + x9]
+
+// ---- 子目录里的脚本 ----
+
+lib sub/kit as subkit
+rw{rsig=subkit.boost(6)}[base + x10]
