@@ -66,7 +66,7 @@ HINTS: Dict[str, str] = {
     "rw": "红石粉（redstone_wire）—— 状态键：rsig / len / axis",
     "rrep": "红石中继器（repeater）—— 状态键：facing / delay / locked",
     "rco": "红石比较器（comparator）—— 状态键：facing / mode / powered",
-    "obs": "侦测器（observer）—— 状态键：facing / powered",
+    "obs": "侦测器（observer）—— 状态键：facing",
     "rtorch": "红石火把（redstone_torch）—— 状态键：powered",
     "rlamp": "红石灯（redstone_lamp）—— 状态键：powered",
     "piston": "活塞（piston）—— 状态键：facing / extended",
