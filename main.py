@@ -3,6 +3,8 @@
 
     python main.py 脚本.rpi
     python -m rupis 脚本.rpi
+
+注意：这个入口只跑命令行解释器；要开图形界面请用 ide.py。
 """
 
 import sys

@@ -10,6 +10,9 @@
     :world     看当前放了多少方块
     :vars      看当前有哪些 dpos / drp 变量
     :load 文件  把一个 .rpi 脚本载入当前会话
+
+跨行输入的判断：攒下来的行拼起来以后，花括号还没配平就说明代码块没写完，
+提示符会变成 "… "，等用户补上收尾的 } 再一起执行。
 """
 
 from __future__ import annotations
@@ -36,7 +39,16 @@ HELP_TEXT = """可用的命令：
 
 
 class RupisConsole(QtWidgets.QWidget):
-    """交互式 Rupis 控制台。"""
+    """交互式 Rupis 控制台。
+
+    整个控件由三部分组成：上面的记录区（transcript）、下面的提示符与输入框，
+    以及一个"载入当前脚本"按钮。
+
+    内部状态：
+        interpreter  当前会话的解释器，变量 / 函数 / 方块都存在这里
+        _pending     还没写完、正在等待续行的代码行
+        _history     敲过的命令，用上下键翻
+    """
 
     # 点"载入当前脚本"时通知主窗口把编辑器里的内容送进来
     loadCurrentRequested = QtCore.pyqtSignal()
@@ -52,6 +64,8 @@ class RupisConsole(QtWidgets.QWidget):
 
     # ------------------------------------------------------------------ 界面
     def _build(self) -> None:
+        """搭出记录区 + 输入行。"""
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(2)
@@ -82,11 +96,14 @@ class RupisConsole(QtWidgets.QWidget):
         layout.addLayout(row)
 
     def apply_theme(self, theme: Dict[str, str]) -> None:
+        """换主题：记录区用的是控件自己的调色板，这里只留一份备用配色。"""
+
         self.theme = theme
 
     # ------------------------------------------------------------------ 事件
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         """上下键翻历史。"""
+
         if obj is self.input and event.type() == QtCore.QEvent.Type.KeyPress:
             if event.key() == QtCore.Qt.Key.Key_Up:
                 self._history_move(-1)
@@ -97,6 +114,8 @@ class RupisConsole(QtWidgets.QWidget):
         return super().eventFilter(obj, event)
 
     def _history_move(self, delta: int) -> None:
+        """在历史记录里前后翻；翻到最下面就回到空输入。"""
+
         if not self._history:
             return
         index = max(0, min(len(self._history), self._history_index + delta))
@@ -109,16 +128,19 @@ class RupisConsole(QtWidgets.QWidget):
     # ------------------------------------------------------------------ 会话
     def reset_session(self) -> None:
         """清空会话状态，重新开始。"""
+
         self.interpreter = Interpreter()
         self._pending = []
 
     def clear(self) -> None:
         """只清屏，不动会话状态。"""
+
         self.transcript.clear()
 
     # ------------------------------------------------------------------ 执行
     def execute(self) -> None:
         """回车：执行当前输入行。"""
+
         text = self.input.text()
         self.input.clear()
         if not text.strip():
@@ -132,6 +154,7 @@ class RupisConsole(QtWidgets.QWidget):
             self._run_command(text.strip())
             return
 
+        # 不是命令就当代码：先攒着，攒够一个完整的代码块再执行
         self._pending.append(text)
         source = "\n".join(self._pending)
         if not _braces_balanced(source):
@@ -144,6 +167,7 @@ class RupisConsole(QtWidgets.QWidget):
 
     def run_source(self, text: str, filename: str = "<控制台>") -> None:
         """在当前会话里执行一整段脚本。"""
+
         try:
             program, source = compile_source(text, filename)
         except RupisError as exc:
@@ -162,6 +186,8 @@ class RupisConsole(QtWidgets.QWidget):
         self._write(f"已载入 {filename}（当前共 {len(interpreter.world)} 个方块）")
 
     def _run(self, source: str, filename: str) -> None:
+        """执行一段代码，并根据语句种类回显结果。"""
+
         interpreter = self.interpreter
 
         # 光敲一个 dpos / drp 变量名，就把它显示出来。
@@ -210,6 +236,8 @@ class RupisConsole(QtWidgets.QWidget):
 
     # ------------------------------------------------------------------ 命令
     def _run_command(self, text: str) -> None:
+        """分发以 : 开头的命令。"""
+
         name, _, arg = text.partition(" ")
         name = name.lower()
         arg = arg.strip()
@@ -230,6 +258,8 @@ class RupisConsole(QtWidgets.QWidget):
             self._write(f"未知命令 {name}，:help 看可用命令", error=True)
 
     def _load_file(self, path_text: str) -> None:
+        """把一个 .rpi 脚本读进来，在当前会话里执行。"""
+
         if not path_text:
             self._write("用法：:load 文件路径", error=True)
             return
@@ -247,6 +277,8 @@ class RupisConsole(QtWidgets.QWidget):
         self.run_source(text, str(path))
 
     def _world_summary(self) -> str:
+        """统计当前放了多少方块，按方块种类分组。"""
+
         world = self.interpreter.world
         if not world:
             return "当前还没有放置任何方块"
@@ -254,11 +286,14 @@ class RupisConsole(QtWidgets.QWidget):
         for placement in world.values():
             counts[placement.block_id] = counts.get(placement.block_id, 0) + 1
         lines = [f"共放置 {len(world)} 个方块："]
+        # 数量多的排前面，数量一样按方块 ID 排，保证输出稳定
         for block_id, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
             lines.append(f"  {block_id}: {count}")
         return "\n".join(lines)
 
     def _vars_summary(self) -> str:
+        """列出当前的 dpos / drp 变量、函数和结构。"""
+
         interpreter = self.interpreter
         lines = []
         if interpreter.dpos_vars:
@@ -280,6 +315,8 @@ class RupisConsole(QtWidgets.QWidget):
     # ------------------------------------------------------------------ 输出
     @staticmethod
     def _format_value(value) -> str:
+        """把一个值格式成给人看的样子。"""
+
         if isinstance(value, tuple):
             return "(" + ", ".join(str(item) for item in value) + ")"
         if isinstance(value, bool):
@@ -291,6 +328,7 @@ class RupisConsole(QtWidgets.QWidget):
 
         模板里存的是还没求值的表达式节点，直接 str() 会打印出一堆 AST 细节。
         """
+
         if not isinstance(states, dict):
             return str(states)
         parts = []
@@ -306,6 +344,8 @@ class RupisConsole(QtWidgets.QWidget):
         return "{" + ", ".join(parts) + "}"
 
     def _write(self, text: str, error: bool = False) -> None:
+        """往记录区追加一行；error=True 时用错误色写，写完再把颜色改回来。"""
+
         cursor = self.transcript.textCursor()
         cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
         if error:
@@ -321,11 +361,14 @@ class RupisConsole(QtWidgets.QWidget):
         self.transcript.ensureCursorVisible()
 
     def focus_input(self) -> None:
+        """把焦点挪到输入框（切到控制台页时用）。"""
+
         self.input.setFocus()
 
 
 def _braces_balanced(text: str) -> bool:
     """判断代码块的花括号是否配平（没配平就说明还没写完）。"""
+
     depth = 0
     for ch in text:
         if ch == "{":

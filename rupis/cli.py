@@ -4,6 +4,8 @@
     python main.py 脚本.rpi --format json # 输出 JSON
     python main.py 脚本.rpi --format structure -o 结构.mcstructure
     python main.py 脚本.rpi --check       # 只检查语法，不执行
+
+退出码：0 成功，1 脚本出错，2 命令行用法不对。
 """
 from __future__ import annotations
 import argparse
@@ -15,15 +17,17 @@ from pathlib import Path
 from . import RupisError, compile_source, run_source
 from . import exporters
 
-EXIT_OK = 0
-EXIT_ERROR = 1
-EXIT_USAGE = 2
+EXIT_OK = 0        # 一切正常
+EXIT_ERROR = 1     # 脚本本身出错（语法错误、运行时报错等）
+EXIT_USAGE = 2     # 命令行用法不对（缺参数、IDE 起不来等）
 
 # flag 用绝对路径，放在 %APPDATA%\Rupis 下，与运行目录无关
 _FLAG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "Rupis"
 FLAG_PATH = _FLAG_DIR / "file_assoc.installed"
 
 def build_parser() -> argparse.ArgumentParser:
+    """构造命令行参数解析器，脚本的全部选项都写在这里。"""
+
     parser = argparse.ArgumentParser(
         prog="rupis",
         description="Rupis 红石脚本解释器（.rpi）",
@@ -54,10 +58,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=3955,
         help=".mcstructure 的 DataVersion（默认 3955，对应 1.21.4）",
     )
+    # 注意：这里写死的版本号和 rupis.__version__ 目前并不一致
     parser.add_argument("--version", action="version", version="Rupis 1.0.0")
     return parser
 
 def read_script(path_text: str) -> str:
+    """读取脚本文本；文件不存在就抛 RupisError。
+
+    先按 UTF-8 读，遇到 GBK 保存的旧脚本再退回 GBK 解码。
+    """
+
     path = Path(path_text)
     if not path.exists():
         raise RupisError(f"找不到脚本文件：{path}")
@@ -68,6 +78,11 @@ def read_script(path_text: str) -> str:
         return path.read_text(encoding="gbk", errors="replace")
 
 def main(argv=None) -> int:
+    """命令行主流程，返回进程退出码。
+
+    argv：可选的参数列表；不传就用 sys.argv[1:]。
+    """
+
     args = build_parser().parse_args(argv)
 
     # 在这里判断flag，不会在导入阶段炸
@@ -104,6 +119,7 @@ def main(argv=None) -> int:
             pass
 
     if args.ide:
+        # IDE 依赖 Qt，没装 PySide6/PyQt 时只能报错退出
         try:
             from .ide import main as ide_main
         except ImportError as exc:
@@ -129,6 +145,7 @@ def main(argv=None) -> int:
 
     try:
         if args.check:
+            # 只编译不执行，用来快速检查语法
             compile_source(text, args.script)
             print(f"{args.script}: 语法检查通过。")
             return EXIT_OK
@@ -138,6 +155,7 @@ def main(argv=None) -> int:
         return EXIT_ERROR
 
     world = interpreter.world
+    # structure 是二进制文件，已经在上面的分支里写盘了，这里不再当文本处理
     if args.format == "summary":
         output = exporters.summary(world)
     elif args.format == "json":
@@ -155,6 +173,7 @@ def main(argv=None) -> int:
         Path(args.output).write_text(output + ("\n" if output else ""), encoding="utf-8")
         print(f"已写出 {args.output}")
     else:
+        # 没给 -o 就直接打到屏幕上
         if output:
             print(output)
     return EXIT_OK

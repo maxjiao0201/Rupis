@@ -1,6 +1,17 @@
 """Rupis IDE 配色。
 
 整套界面共用同一份字典；换主题就是换字典 + 重新刷一次控件。
+
+字典里的键大致分成四类：
+    * 底色 / 文字：bg、fg、panel、panel_fg、gutter_bg、gutter_fg、curline、
+      sel_bg、hint_bg、hint_fg、status_bg、status_fg、border；
+    * 语法高亮：kw（关键字）、elem（元件指令）、const（内置常量）、
+      func（结构名 / 函数名）、number、string、comment；
+    * 状态标记：err / err_fg（出错行）、match_bg / match_fg（查找命中）、
+      bracket（括号配对）；
+    * 按钮：btn、btn_active、btn_fg，另外 name 是主题自己的名字。
+
+按键名取值，不要按位置取值 —— 加一个新颜色时不必打乱已有顺序。
 """
 
 from __future__ import annotations
@@ -73,6 +84,7 @@ LIGHT: Dict[str, str] = {
     "hint_fg": "#5f5f5f",
 }
 
+# 主题名 → 配色字典；主窗口按名字从这里取
 THEMES = {"dark": DARK, "light": LIGHT}
 
 

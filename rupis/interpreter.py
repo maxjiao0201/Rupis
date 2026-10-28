@@ -1,19 +1,25 @@
 """Rupis 解释器：执行 AST，产出方块世界数据。
 
 世界模型：
-    world: Dict[(x, y, z), Placement]
+    world: Dict[(x, y, z), Placement]   同一坐标只保留最后一次放置的结果
+    order: List[(x, y, z)]               方块首次出现的顺序（保留放置先后）
 每个 Placement 记录 Minecraft 方块 ID 与最终方块状态（已把 Rupis 状态键
 翻译成 Minecraft 真实属性名）。
 
 状态优先级（从高到低）：
-    1. 指令上显式写出的状态块
-    2. 结构默认状态（strudef 的 {默认状态} 与 stru 的 {覆盖状态} 合并结果）
-    3. 全局 drp
+    1.  指令状态槽里显式写出的键值对 {键=值}
+    1'. 指令状态槽里引用的 drp 变量 {名字}
+    2.  结构默认状态（strudef 的 {默认状态} 与 stru 的 {覆盖状态} 合并结果）
+    —— 没有全局 drp：不写状态槽时不会自动套用任何 drp 变量
+
 规则说明：
-    * 写了状态块（哪怕是 {}）→ 完全覆盖 drp（规范第九节第 1 条）；
-    * 没写状态块 → 自动套用 drp；
-    * drp / 结构默认状态里元件不支持的键 → 静默忽略；
+    * 显式状态与 drp 模板只覆盖同名的键，其余键仍由结构默认状态补齐；
+    * drp 模板 / 结构默认状态里元件不支持的键 → 静默忽略；
     * 显式写出的状态键元件不支持 → 报错并给出位置（规范第九节第 5 条）。
+
+坐标约定：
+    * 全局作用域里的坐标就是世界坐标；
+    * 结构里的坐标是结构局部坐标，会自动加上结构原点（stru 的调用位置）。
 """
 
 from __future__ import annotations
@@ -38,24 +44,34 @@ from .errors import RupisError, RuntimeErr, Source
 from .lexer import Lexer
 from .parser import Parser
 
+# 函数调用层数上限：挡住无限递归，免得把 Python 的调用栈撑爆
 MAX_CALL_DEPTH = 256
+# 循环迭代次数上限：挡住死循环，免得解释器一直卡着不返回
 MAX_LOOP_ITERATIONS = 1_000_000
 
+# 世界坐标：(x, y, z)
 Coord3 = Tuple[int, int, int]
 
 
 # --------------------------------------------------------------------- 控制流信号
+# break / continue / return 要能穿过任意多层嵌套的 if 与循环。
+# 用返回值往下传的话，每一层都得记得判断再往上抛；用异常则能直接冒泡到
+# 真正处理它的那一层（循环或函数），写起来干净很多。
 class _Return(Exception):
+    """函数返回信号：把 return 的值带出函数体。"""
+
     def __init__(self, value: Any) -> None:
+        """记下要返回的值。"""
+
         self.value = value
 
 
 class _Break(Exception):
-    pass
+    """跳出当前循环的信号。"""
 
 
 class _Continue(Exception):
-    pass
+    """进入当前循环下一轮的信号。"""
 
 
 # --------------------------------------------------------------------- 数据结构
@@ -70,6 +86,8 @@ class Placement:
     origin: str = "world"     # world | struct
 
     def command(self) -> str:
+        """生成这个方块对应的 /setblock 命令。"""
+
         if self.states:
             state_text = ",".join(f"{k}={fmt_state(v)}" for k, v in sorted(self.states.items()))
             return f"/setblock {self.pos[0]} {self.pos[1]} {self.pos[2]} {self.block_id}[{state_text}]"
@@ -77,7 +95,10 @@ class Placement:
 
 
 def fmt_state(value: Any) -> str:
-    """把状态值格式化成 Minecraft 命令里的写法。"""
+    """把状态值格式化成 Minecraft 命令里的写法。
+
+    布尔写成 true / false，方向写成英文名，整数值浮点数去掉小数尾巴。
+    """
 
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -93,15 +114,21 @@ class ModuleFunction:
     """被导入脚本里的一个 def 函数，包一层就能直接调用。"""
 
     def __init__(self, interp: "Interpreter", func: FuncDef) -> None:
+        """记下它属于哪个解释器、对应哪个函数定义。"""
+
         self.interp = interp
         self.func = func
         self.name = func.name
         self.params = list(func.params)
 
     def __call__(self, *args: Any) -> Any:
+        """被调用时转交给解释器去跑函数体。"""
+
         return self.interp.invoke_function(self.func, args)
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
+        """调试输出。"""
+
         return f"<函数 {self.name}/{len(self.params)}>"
 
 
@@ -121,6 +148,8 @@ class RupisModule:
         structs: Dict[str, StructDef],
         interp: "Interpreter",
     ) -> None:
+        """建好命名空间，并把脚本里的 def 包成可以直接调用的对象。"""
+
         self.name = name
         self.path = path
         self.functions = functions
@@ -131,6 +160,8 @@ class RupisModule:
         }
 
     def __getattr__(self, item: str) -> Any:
+        """按名字取出脚本里的函数（结构不走这里，要用 stru 实例化）。"""
+
         # 只有正常属性找不到时才会走到这里
         callables = self.__dict__.get("_callables") or {}
         if item in callables:
@@ -143,11 +174,19 @@ class RupisModule:
         return sorted(set(self.functions) | set(self.structs))
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
+        """调试输出。"""
+
         return f"<脚本 {self.name}（{self.path}）>"
 
 
 # ------------------------------------------------------------------------ 作用域
 class Scope:
+    """一层作用域：一张变量表，加上指向外层的父作用域。
+
+    查找变量时从当前层开始沿 parent 往上冒泡，命中第一个同名变量就用它；
+    一路到顶都没找到，才算"未定义的变量"。
+    """
+
     __slots__ = ("vars", "parent", "origin", "defaults", "default_positions")
 
     def __init__(
@@ -157,6 +196,11 @@ class Scope:
         defaults: Optional[Dict[str, Any]] = None,
         default_positions: Optional[Dict[str, Tuple[int, int]]] = None,
     ) -> None:
+        """建一层作用域。
+
+        origin / defaults 是结构相关的信息，普通作用域不用填。
+        """
+
         self.vars: Dict[str, Any] = {}
         self.parent = parent
         self.origin = origin          # 结构原点（局部坐标系原点）
@@ -164,6 +208,8 @@ class Scope:
         self.default_positions = default_positions or {}
 
     def get(self, name: str) -> Any:
+        """按名字取变量，沿父作用域链向上冒泡；没有就抛 KeyError。"""
+
         scope: Optional[Scope] = self
         while scope is not None:
             if name in scope.vars:
@@ -172,6 +218,8 @@ class Scope:
         raise KeyError(name)
 
     def has(self, name: str) -> bool:
+        """这个名字在这个作用域链上是否可见。"""
+
         scope: Optional[Scope] = self
         while scope is not None:
             if name in scope.vars:
@@ -180,12 +228,18 @@ class Scope:
         return False
 
     def set(self, name: str, value: Any) -> None:
+        """在当前层写入变量（不会动到外层同名的变量）。"""
+
         self.vars[name] = value
 
     def unset(self, name: str) -> None:
+        """从当前层删掉变量；本来就没有也不报错。"""
+
         self.vars.pop(name, None)
 
     def find_origin(self) -> Optional[Coord3]:
+        """找到最近的结构原点；不在结构里返回 None。"""
+
         scope: Optional[Scope] = self
         while scope is not None:
             if scope.origin is not None:
@@ -194,6 +248,8 @@ class Scope:
         return None
 
     def find_defaults(self) -> Dict[str, Any]:
+        """找到最近一层的结构默认状态；不在结构里返回空字典。"""
+
         scope: Optional[Scope] = self
         while scope is not None:
             if scope.defaults:
@@ -202,6 +258,11 @@ class Scope:
         return {}
 
     def find_default_positions(self) -> Dict[str, Tuple[int, int]]:
+        """找到结构默认状态里每个键的位置，用来把错误指到具体那行。
+
+        与 find_defaults 取的是同一层：那一层 defaults 为空就继续往上找。
+        """
+
         scope: Optional[Scope] = self
         while scope is not None:
             if scope.defaults:
@@ -212,12 +273,24 @@ class Scope:
 
 # ----------------------------------------------------------------------- 解释器
 class Interpreter:
+    """Rupis 解释器：持有全局状态，执行语句，把方块收进世界里。
+
+    全局状态：
+        world / order   产出的方块世界
+        functions       全局函数表（def 定义的 + lib 导入的）
+        structs         全局结构表
+        dpos_vars       全局 dpos 坐标变量
+        drp_vars        全局 drp 状态模板变量
+    """
+
     def __init__(
         self,
         source: Optional[Source] = None,
         verbose: bool = False,
         lib_paths: Optional[List[Any]] = None,
     ) -> None:
+        """新建解释器。lib_paths 是 lib 导入时额外要搜的目录。"""
+
         self.source = source
         self.verbose = verbose
         self.world: Dict[Coord3, Placement] = {}
@@ -235,20 +308,28 @@ class Interpreter:
 
     # ------------------------------------------------------------------ 工具
     def error(self, message: str, node: Any = None) -> RuntimeErr:
+        """造一个带行列号的运行时错误（node 上有行列信息就用它的）。"""
+
         line = getattr(node, "line", None)
         col = getattr(node, "col", None)
         return RuntimeErr(message, line, col, self.source)
 
     # ------------------------------------------------------------------ 主流程
     def run(self, program: List) -> None:
+        """执行整个程序：顶层语句逐条跑在全局作用域里。"""
+
         for stmt in program:
             self.exec_stmt(stmt, self.global_scope)
 
     def exec_block(self, body: List, scope: Scope) -> None:
+        """顺序执行一串语句，共用同一个作用域（if / for 的块不另开作用域）。"""
+
         for stmt in body:
             self.exec_stmt(stmt, scope)
 
     def exec_stmt(self, stmt, scope: Scope) -> None:
+        """按语句类型分派到对应的 _exec_XXX 方法。"""
+
         if stmt is None:
             return
         method = getattr(self, "_exec_" + type(stmt).__name__, None)
@@ -258,13 +339,20 @@ class Interpreter:
 
     # ------------------------------------------------------------- 全局配置
     def _exec_DposStmt(self, stmt: DposStmt, scope: Scope) -> None:
-        """声明/覆盖一个 dpos 坐标变量：dpos 名称[x,y,z]"""
+        """声明/覆盖一个 dpos 坐标变量：dpos 名称[x,y,z]
+
+        存的是绝对坐标（absolute=True，忽略结构原点偏移）；
+        在结构里写 [base] 时，结构原点会再叠加上来。
+        """
 
         coord = self.eval_coord(stmt.coord, scope, absolute=True)
         self.dpos_vars[stmt.name] = coord
 
     def _exec_DrpStmt(self, stmt: DrpStmt, scope: Scope) -> None:
-        """声明/覆盖一个 drp 状态模板变量：drp 名称{键=值}"""
+        """声明/覆盖一个 drp 状态模板变量：drp 名称{键=值}
+
+        drp a{b} 这种写法先记下另一个 drp 变量的名字，用到的时候才展开。
+        """
 
         if stmt.states_ref is not None:
             self.drp_vars[stmt.name] = stmt.states_ref
@@ -279,6 +367,7 @@ class Interpreter:
             1. 原名直接可用：helper(...) / stru my_struct(...)
             2. 命名空间也绑上：util.helper(...) / stru util.my_struct(...)
         被导入脚本顶层的放置指令不执行 —— 它只是个库。
+        搜索顺序：当前脚本所在目录 → lib_paths → 当前工作目录。
         """
 
         path = self.find_lib_file(stmt.script)
@@ -307,14 +396,18 @@ class Interpreter:
                 structs[item.name] = item
 
         # 原名直接可用（同名的以后来导入的为准）
+        # 函数 / 结构登记在全局表里，任何作用域都能用
         self.functions.update(functions)
         self.structs.update(structs)
 
-        # 命名空间
+        # 命名空间：绑在当前作用域上，写在函数里的 lib 只在该函数里可见
         scope.set(stmt.name, RupisModule(stmt.name, path, functions, structs, self))
 
     def lib_search_dirs(self) -> List[Path]:
-        """lib 找 .rpi 脚本时会搜的目录（按顺序）。"""
+        """lib 找 .rpi 脚本时会搜的目录（按顺序）。
+
+        顺序是：当前脚本所在目录 → lib_paths → 当前工作目录。
+        """
 
         dirs: List[Path] = []
         if self.source is not None and self.source.filename:
@@ -335,7 +428,10 @@ class Interpreter:
         return unique
 
     def find_lib_file(self, script: str) -> Optional[Path]:
-        """按名字找 .rpi 脚本：先找当前脚本所在的目录，再找 lib 目录、当前目录。"""
+        """按名字找 .rpi 脚本：先找当前脚本所在的目录，再找 lib 目录、当前目录。
+
+        脚本名里的 / 当子目录处理；没写 .rpi 后缀时自动补上。
+        """
 
         relative = Path(*script.split("/")) if script else Path()
         for folder in self.lib_search_dirs():
@@ -346,7 +442,10 @@ class Interpreter:
                 return candidate
         return None
 
+    # ------------------------------------------------------- dpos / drp 查找
     def lookup_dpos_var(self, name: str, node: Any) -> Coord3:
+        """取 dpos 坐标变量的坐标；没声明过就报错并列出已声明的。"""
+
         if name not in self.dpos_vars:
             known = ", ".join(sorted(self.dpos_vars)) or "（还没有声明任何 dpos 变量）"
             raise self.error(f"未定义的 dpos 变量 '{name}'（已声明：{known}）", node)
@@ -359,7 +458,10 @@ class Interpreter:
         node: Any,
         depth: int = 0,
     ) -> Tuple[Dict[str, Any], Dict[str, Tuple[int, int]]]:
-        """取出 drp 变量的状态模板，返回 (求值后的状态, 每个键的位置)。"""
+        """取出 drp 变量的状态模板，返回 (求值后的状态, 每个键的位置)。
+
+        drp a{b} 的引用形式会递归展开，depth 用来挡住循环引用。
+        """
 
         if depth > 16:
             raise self.error(f"drp 变量 '{name}' 存在循环引用", node)
@@ -378,9 +480,13 @@ class Interpreter:
 
     # ----------------------------------------------------------------- 变量
     def _exec_LetStmt(self, stmt: LetStmt, scope: Scope) -> None:
+        """声明一个普通变量，写在当前作用域。"""
+
         scope.set(stmt.name, self.eval_expr(stmt.value, scope))
 
     def _exec_AssignStmt(self, stmt: AssignStmt, scope: Scope) -> None:
+        """给变量赋值。"""
+
         value = self.eval_expr(stmt.value, scope)
         # 已存在的变量：就地赋值；否则在当前作用域新建
         target_scope: Optional[Scope] = scope
@@ -396,12 +502,20 @@ class Interpreter:
 
     # --------------------------------------------------------------- 控制流
     def _exec_IfStmt(self, stmt: IfStmt, scope: Scope) -> None:
+        """if / else 分支。"""
+
         if truthy(self.eval_expr(stmt.cond, scope)):
             self.exec_block(stmt.then_body, scope)
         elif stmt.else_body is not None:
             self.exec_block(stmt.else_body, scope)
 
     def _exec_ForStmt(self, stmt: ForStmt, scope: Scope) -> None:
+        """for 循环：闭区间，可以正着数也可以倒着数。
+
+        循环变量写在当前作用域，循环结束后恢复成原来的值
+        （原来没有这个变量就删掉）。
+        """
+
         start = int(self.eval_expr(stmt.start, scope))
         end = int(self.eval_expr(stmt.end, scope))
         had_var = scope.has(stmt.var)
@@ -430,6 +544,8 @@ class Interpreter:
                 scope.unset(stmt.var)
 
     def _exec_WhileStmt(self, stmt: WhileStmt, scope: Scope) -> None:
+        """while 循环。"""
+
         count = 0
         while truthy(self.eval_expr(stmt.cond, scope)):
             count += 1
@@ -443,23 +559,35 @@ class Interpreter:
                 break
 
     def _exec_ReturnStmt(self, stmt: ReturnStmt, scope: Scope) -> None:
+        """return：把返回值带出函数体。"""
+
         value = self.eval_expr(stmt.value, scope) if stmt.value is not None else None
         raise _Return(value)
 
     def _exec_BreakStmt(self, stmt: BreakStmt, scope: Scope) -> None:
+        """break：跳出当前循环。"""
+
         raise _Break()
 
     def _exec_ContinueStmt(self, stmt: ContinueStmt, scope: Scope) -> None:
+        """continue：进入当前循环的下一轮。"""
+
         raise _Continue()
 
     def _exec_ExprStmt(self, stmt: ExprStmt, scope: Scope) -> None:
+        """只求值的语句（结果丢掉不要）。"""
+
         self.eval_expr(stmt.expr, scope)
 
     # ---------------------------------------------------------- 函数 / 结构
     def _exec_FuncDef(self, stmt: FuncDef, scope: Scope) -> None:
+        """登记一个 def 函数（函数体要等到被调用时才执行）。"""
+
         self.functions[stmt.name] = stmt
 
     def _exec_StructDef(self, stmt: StructDef, scope: Scope) -> None:
+        """登记一个 strudef 结构定义。"""
+
         self.structs[stmt.name] = stmt
 
     def lookup_struct(self, name: str, scope: Scope, node: Any) -> StructDef:
@@ -483,6 +611,12 @@ class Interpreter:
         return struct
 
     def _exec_StructCall(self, stmt: StructCall, scope: Scope) -> None:
+        """执行 stru 调用：建一个结构作用域，把结构体跑一遍。
+
+        结构默认状态 = strudef 里的 {默认状态} 与本次调用的 {覆盖状态} 合并，
+        覆盖值优先；这些键同时也能当局部变量读。
+        """
+
         struct = self.lookup_struct(stmt.name, scope, stmt)
 
         if stmt.kwargs:
@@ -519,6 +653,7 @@ class Interpreter:
                 defaults[key] = self.eval_expr(entry.expr, scope)
                 default_positions[key] = (entry.line, entry.col)
 
+        # 结构作用域的父级也是全局作用域：结构体看得到全局变量
         struct_scope = Scope(
             parent=self.global_scope,
             origin=origin,
@@ -536,6 +671,12 @@ class Interpreter:
 
     # ------------------------------------------------------------- 放置指令
     def _exec_PlaceStmt(self, stmt: PlaceStmt, scope: Scope) -> None:
+        """执行一条放置指令：算出方块 ID 与最终状态，再写进世界。
+
+        指令名分三类：元件（rw / rrep …）、rbl 快捷方块、block 原生方块。
+        只有元件才校验状态键，原生方块的状态键原样透传。
+        """
+
         target = stmt.target
         element: Optional[Element] = None
         supported: Optional[Dict[str, str]] = None
@@ -601,6 +742,7 @@ class Interpreter:
         优先级：
             1. 状态槽里显式写的键值对 / 引用的 drp 变量
             2. 结构默认状态（只填补上面没写的键）
+        没有全局 drp：不写状态槽时，最终状态就只有结构默认状态。
         drp 模板里元件不支持的键会被忽略；显式写出的不支持键则报错。
         """
 
@@ -622,6 +764,7 @@ class Interpreter:
                 positions[key] = (entry.line, entry.col)
 
         final: Dict[str, Any] = {}
+        # 结构默认状态打底，显式状态 / drp 模板覆盖同名的键
         final.update(defaults)
         if explicit is not None:
             final.update(explicit)
@@ -653,7 +796,11 @@ class Interpreter:
         scope: Scope,
         element: Optional[Element],
     ) -> Any:
-        """求值一个状态值；顺手把"变量不存在"翻译成更贴切的提示。"""
+        """求值一个状态值；顺手把"变量不存在"翻译成更贴切的提示。
+
+        状态值写了一个没定义的变量，多半是想写某个枚举值，
+        所以这里补一句该键的合法取值，比光说"未定义的变量"有用。
+        """
 
         try:
             return self.eval_expr(entry.expr, scope)
@@ -667,7 +814,7 @@ class Interpreter:
             raise
 
     def valid_values_hint(self, key: str, element: Optional[Element]) -> str:
-        """给出某个状态键的合法取值提示。"""
+        """给出某个状态键的合法取值提示（元件没定义就返回空串）。"""
 
         if element is not None:
             if key in element.choices:
@@ -688,6 +835,12 @@ class Interpreter:
         scope: Scope,
         positions: Optional[Dict[str, Tuple[int, int]]] = None,
     ) -> None:
+        """把一个方块写进世界，同一坐标重复放置时后者覆盖前者。
+
+        元件的状态键要翻译成 Minecraft 的真实属性名（rsig → power），
+        解释器专用的伪键（rw 的 len / axis）不发出去。
+        """
+
         positions = positions or {}
         element = ELEMENTS.get(target.name) if target.kind == "element" else None
         mc_states: Dict[str, Any] = {}
@@ -727,6 +880,11 @@ class Interpreter:
         target: Target,
         position: Optional[Tuple[int, int]] = None,
     ) -> Any:
+        """把状态值转成 Minecraft 要的类型，顺便做取值校验。
+
+        判定顺序：区间 → 枚举取值 → 布尔 → 整数 → facing → 原样返回。
+        """
+
         # 先做区间/取值校验，再做通用类型转换
         if key in element.ranges:
             number = to_int(value)
@@ -792,6 +950,8 @@ class Interpreter:
     ) -> Coord3:
         """求值坐标槽。
 
+        坐标 = dpos 变量的坐标（没写就当 0,0,0）+ 各轴偏移量，
+        最后再加上作用域的原点偏移（结构里就是结构原点）。
         absolute=True 时忽略结构原点偏移（用于 dpos 变量声明本身）。
         """
 
@@ -815,6 +975,8 @@ class Interpreter:
 
     # --------------------------------------------------------------- 表达式
     def eval_expr(self, expr: Optional[Expr], scope: Scope) -> Any:
+        """求值一个表达式，按节点类型分派。"""
+
         if expr is None:
             return None
         if isinstance(expr, Num):
@@ -839,6 +1001,8 @@ class Interpreter:
         raise self.error(f"无法求值的表达式 {type(expr).__name__}", expr)
 
     def eval_var(self, expr: Var, scope: Scope) -> Any:
+        """取变量的值；作用域链上没有就看是不是内置常量。"""
+
         name = expr.name
         if scope.has(name):
             return scope.get(name)
@@ -875,6 +1039,11 @@ class Interpreter:
                 f"{describe_object(obj)} 没有属性 '{expr.name}'", expr)
 
     def eval_binary(self, expr: Binary, scope: Scope) -> Any:
+        """二元运算：&& / || 先短路，其余再按运算符分派。
+
+        短路必须在求值右操作数之前判断，否则 a && f() 里的 f() 照样会被调用。
+        """
+
         op = expr.op
         if op == "&&":
             return truthy(self.eval_expr(expr.left, scope)) and truthy(self.eval_expr(expr.right, scope))
@@ -914,6 +1083,8 @@ class Interpreter:
 
     # ----------------------------------------------------------------- 函数
     def call_function(self, expr: Call, scope: Scope) -> Any:
+        """调用函数：按名字调本脚本的函数，表达式形式的调用转给 call_value。"""
+
         # 通过表达式调用：多半是 lib 导入的脚本里的函数
         if expr.func is not None:
             return self.call_value(expr, scope)
@@ -935,6 +1106,9 @@ class Interpreter:
         """真正去执行一个 def 函数的函数体。
 
         本脚本的函数、lib 导入的脚本里的函数，走的都是这一条路。
+        函数体的父作用域固定是全局作用域（不是调用它的那个函数），
+        所以函数只看得到全局变量，不会顺手改到调用者的局部变量。
+        origin 传进来时，函数里的坐标就相对该原点（在结构里调用函数的情形）。
         """
 
         if kwargs:
@@ -944,6 +1118,7 @@ class Interpreter:
                 f"函数 '{func.name}' 需要 {len(func.params)} 个参数，实际传入 {len(args)} 个", node
             )
         if self.call_depth >= MAX_CALL_DEPTH:
+            # 无限递归的保险丝：宁可报错，也别把 Python 的栈撑爆
             raise self.error("函数调用层数过深（可能存在无限递归）", node)
 
         func_scope = Scope(
@@ -985,7 +1160,7 @@ class Interpreter:
 
 # ------------------------------------------------------------------ 取值辅助
 def import_dotted(dotted: str) -> Any:
-    """按点号路径导入 Python 模块：os.path → 先 import os，再取 os.path。
+    """（已废弃）按点号路径导入 Python 模块：os.path → 先 import os，再取 os.path。
 
     不用 importlib.import_module("os.path")，因为路径最后一段未必是模块
     （math.sqrt 是个函数，import_module 会直接报找不到模块）。
@@ -1002,6 +1177,7 @@ def import_dotted(dotted: str) -> Any:
 
 def describe_object(obj: Any) -> str:
     """给对象起个能看懂的名字，报错时用。"""
+
     if isinstance(obj, RupisModule):
         return f"脚本 '{obj.name}'"
     if isinstance(obj, type(sys)):
@@ -1010,6 +1186,8 @@ def describe_object(obj: Any) -> str:
 
 
 def truthy(value: Any) -> bool:
+    """Rupis 的真值判断：0、空串、None 都算假。"""
+
     if isinstance(value, bool):
         return value
     if value is None:
@@ -1022,6 +1200,8 @@ def truthy(value: Any) -> bool:
 
 
 def to_number(value: Any) -> Any:
+    """转成数字；字符串会先试整数、再试浮点。"""
+
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, (int, float)):
@@ -1040,6 +1220,8 @@ def to_number(value: Any) -> Any:
 
 
 def to_int(value: Any) -> int:
+    """转成整数（浮点会四舍五入）。"""
+
     number = to_number(value)
     if isinstance(number, float):
         return int(round(number))
@@ -1047,6 +1229,8 @@ def to_int(value: Any) -> int:
 
 
 def to_bool(value: Any) -> bool:
+    """转成布尔：true / yes / on / 1 之类算真，false / no / off / 0 算假。"""
+
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -1061,6 +1245,8 @@ def to_bool(value: Any) -> bool:
 
 
 def values_equal(left: Any, right: Any) -> bool:
+    """比较两个值是否相等：布尔按真值比，其余按类型比。"""
+
     if isinstance(left, bool) or isinstance(right, bool):
         return to_bool(left) == to_bool(right)
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
@@ -1073,6 +1259,8 @@ def values_equal(left: Any, right: Any) -> bool:
 
 
 def compare_values(op: str, left: Any, right: Any, expr: Binary, interp: Interpreter) -> bool:
+    """大小比较；两边必须都是数字或都是字符串。"""
+
     try:
         if isinstance(left, (int, float)) and isinstance(right, (int, float)):
             pass

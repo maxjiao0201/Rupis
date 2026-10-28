@@ -6,6 +6,11 @@
 
 面板本身不含查找逻辑，真正的匹配由编辑器完成（编辑器用的是 Python re，
 所以正则行为跟写脚本时一致）。
+
+支持的选项：
+    区分大小写  默认不区分
+    正则        把查找内容当正则表达式；替换文本里可以用 \\1、\\2 这样的反向引用
+    全部替换    一次性替换所有命中；单次替换只动当前选中（或下一个）的那一处
 """
 
 from __future__ import annotations
@@ -14,7 +19,10 @@ from .qtcompat import QtCore, QtWidgets
 
 
 class FindPanel(QtWidgets.QWidget):
-    """查找 / 替换条。"""
+    """查找 / 替换条。
+
+    面板只管收集选项、显示命中数量，真正的匹配与替换都交给编辑器。
+    """
 
     def __init__(self, editor, parent=None) -> None:
         super().__init__(parent)
@@ -95,6 +103,8 @@ class FindPanel(QtWidgets.QWidget):
         self.replace_edit.installEventFilter(self)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        """在查找框 / 替换框里按 Esc 就收起面板。"""
+
         if event.type() == QtCore.QEvent.Type.KeyPress and \
                 event.key() == QtCore.Qt.Key.Key_Escape:
             self.hide_panel()
@@ -104,6 +114,7 @@ class FindPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------ 显示
     def show_panel(self, replace: bool = False) -> None:
         """弹出面板；replace=True 时同时显示替换那一行。"""
+
         self.replace_row.setVisible(replace)
         self.show()
         # 光标处有词就拿来当查找关键字
@@ -116,12 +127,16 @@ class FindPanel(QtWidgets.QWidget):
         self._refresh_highlights()
 
     def hide_panel(self) -> None:
+        """收起面板，并把高亮的命中痕迹清掉。"""
+
         self.editor.clear_find_highlights()
         self.hide()
         self.editor.setFocus()
 
     # ------------------------------------------------------------------ 查找
     def _options(self) -> dict:
+        """把两个勾选框打包成编辑器认识的选项参数。"""
+
         return {
             "case_sensitive": self.case_box.isChecked(),
             "regex": self.regex_box.isChecked(),
@@ -129,6 +144,7 @@ class FindPanel(QtWidgets.QWidget):
 
     def _refresh_highlights(self) -> None:
         """按当前条件重新算命中位置并高亮。"""
+
         needle = self.find_edit.text()
         if not needle:
             self.editor.clear_find_highlights()
@@ -146,6 +162,8 @@ class FindPanel(QtWidgets.QWidget):
         self.count_label.setText(f"共 {len(matches)} 处")
 
     def find_next(self) -> None:
+        """跳到下一处命中。"""
+
         needle = self.find_edit.text()
         if not needle:
             return
@@ -160,6 +178,8 @@ class FindPanel(QtWidgets.QWidget):
             self.count_label.setText(f"共 {self.editor.match_count} 处")
 
     def find_previous(self) -> None:
+        """跳到上一处命中。"""
+
         needle = self.find_edit.text()
         if not needle:
             return
@@ -173,6 +193,8 @@ class FindPanel(QtWidgets.QWidget):
 
     # ------------------------------------------------------------------ 替换
     def replace_current(self) -> None:
+        """替换当前选中（或下一处）的那一个命中。"""
+
         needle = self.find_edit.text()
         if not needle:
             return
@@ -186,6 +208,8 @@ class FindPanel(QtWidgets.QWidget):
             self.count_label.setText("没有匹配")
 
     def replace_all(self) -> None:
+        """把所有命中一次性替换掉。"""
+
         needle = self.find_edit.text()
         if not needle:
             return
@@ -198,5 +222,7 @@ class FindPanel(QtWidgets.QWidget):
         self.count_label.setText(f"已替换 {count} 处")
 
     def _show_regex_error(self, exc: Exception) -> None:
+        """正则写坏了：在计数标签上显示提示，详细原因放进悬浮提示。"""
+
         self.count_label.setText("正则无效")
         self.count_label.setToolTip(str(exc))

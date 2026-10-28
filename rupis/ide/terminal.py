@@ -10,6 +10,11 @@ Windows 上跑 cmd.exe，别的平台跑 sh。
     一条命令一个进程就没这问题：Ctrl+C 直接把整棵进程树砍掉。
 
 代价是 cd 得自己记。命令跑完时让 cmd 顺带打印一下当前目录，拿到就更新。
+
+目录探针的细节：
+    探针是 `for %i in (.) do @echo __RUPIS_CWD__:%~fi`，
+    %~fi 展开成当前目录的完整路径；输出里带这个前缀的行被截出来当目录，
+    不显示在终端里。
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ _CD_RE = re.compile(r"^\s*(?:cd|chdir)\s+(?:/d\s+)?(.+?)\s*$", re.IGNORECASE)
 
 def shell_encoding() -> str:
     """cmd 的输出走 OEM 代码页（中文系统是 cp936），不是 ANSI 代码页。"""
+
     if os.name == "nt":
         try:
             import ctypes
@@ -62,6 +68,7 @@ def build_command_line(command: str) -> str:
     引号数是奇数（用户自己敲漏了）时不拼探针 —— 那条命令多半也跑不对，
     硬拼反而会把后面一整段都吞进引号里。
     """
+
     if os.name == "nt":
         if command.count('"') % 2 == 0:
             return f'cmd.exe /d /s /c "{command} & {_CWD_PROBE}"'
@@ -72,11 +79,18 @@ def build_command_line(command: str) -> str:
 
 def _is_marker_candidate(text: str) -> bool:
     """这段文字可能是目录标记（要么是标记本身，要么是标记的前半截）。"""
+
     return _CWD_PREFIX.startswith(text) or text.startswith(_CWD_PREFIX)
 
 
 class _CommandThread(QtCore.QThread):
-    """在后台跑一条命令，输出实时送回界面。"""
+    """在后台跑一条命令，输出实时送回界面。
+
+    信号：
+        output        一段普通输出（已去掉目录标记）
+        cwdFound      探针回读到的当前目录
+        commandDone   命令结束，参数是退出码
+    """
 
     output = QtCore.pyqtSignal(str)
     cwdFound = QtCore.pyqtSignal(str)
@@ -95,6 +109,8 @@ class _CommandThread(QtCore.QThread):
 
     # ------------------------------------------------------------------ 执行
     def run(self) -> None:  # noqa: D102
+        """起进程、读输出、等退出。"""
+
         try:
             line = build_command_line(self.command)
         except Exception as exc:  # pragma: no cover - 兜底
@@ -102,6 +118,7 @@ class _CommandThread(QtCore.QThread):
             self.commandDone.emit(-1)
             return
 
+        # stderr 合并进 stdout，这样终端里只有一个输出流，顺序也是对的
         kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                       stdin=subprocess.DEVNULL, cwd=self.cwd)
         if os.name == "nt":
@@ -143,6 +160,8 @@ class _CommandThread(QtCore.QThread):
 
     def _read_loop(self) -> None:
         """把子进程的输出读出来，边读边发。"""
+
+        # 增量解码：一次读到的字节可能是半个多字节字符
         decoder = codecs.getincrementaldecoder(self.encoding)(errors="replace")
         try:
             while True:
@@ -161,6 +180,7 @@ class _CommandThread(QtCore.QThread):
 
     def _feed(self, text: str) -> None:
         """把一段输出拆成行，目录标记那条单独拎出来。"""
+
         if self._stop_output:
             return
         self._buf += text
@@ -173,6 +193,8 @@ class _CommandThread(QtCore.QThread):
             self._buf = ""
 
     def _emit_line(self, line: str) -> None:
+        """输出一整行；带目录标记的行改走 cwdFound 信号，不显示。"""
+
         line = line.rstrip("\r")
         if line.startswith(_CWD_PREFIX):
             self.cwdFound.emit(line[len(_CWD_PREFIX):].strip())
@@ -181,6 +203,7 @@ class _CommandThread(QtCore.QThread):
 
     def _flush(self) -> None:
         """命令结束，把最后一段没换行的输出处理掉。"""
+
         if not self._buf or self._stop_output:
             return
         if self._buf.startswith(_CWD_PREFIX):
@@ -192,6 +215,7 @@ class _CommandThread(QtCore.QThread):
     # ------------------------------------------------------------------ 中断
     def kill(self) -> None:
         """把命令连同它起的子进程一起干掉。"""
+
         proc = self.proc
         if proc is None:
             # 进程还没创建出来 —— 记下来，等它起来马上补刀
@@ -213,6 +237,7 @@ class _CommandThread(QtCore.QThread):
             except Exception:  # pragma: no cover
                 pass
             return
+        # POSIX 下按进程组杀，否则子孙进程会漏掉
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except Exception:  # pragma: no cover
@@ -223,7 +248,11 @@ class _CommandThread(QtCore.QThread):
 
 
 class TerminalWidget(QtWidgets.QWidget):
-    """下方面板的终端页。"""
+    """下方面板的终端页。
+
+    控件分三块：上面一条工作目录栏，中间是输出记录，下面是提示符与输入框。
+    每敲一条命令就起一个后台线程，线程结束后线程对象被销毁。
+    """
 
     def __init__(self, cwd=None, theme: Optional[Dict[str, str]] = None,
                  parent=None) -> None:
@@ -241,6 +270,8 @@ class TerminalWidget(QtWidgets.QWidget):
 
     # ------------------------------------------------------------------ 界面
     def _build(self) -> None:
+        """搭出目录栏、输出区和输入行。"""
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(2)
@@ -286,6 +317,8 @@ class TerminalWidget(QtWidgets.QWidget):
         layout.addLayout(row)
 
     def apply_theme(self, theme: Dict[str, str]) -> None:
+        """换主题：只有目录标签用了自定义颜色，其余走控件自己的调色板。"""
+
         self.theme = theme
         self.dir_label.setStyleSheet(f"color: {theme.get('dim', '#858585')};")
 
@@ -293,10 +326,12 @@ class TerminalWidget(QtWidgets.QWidget):
     @property
     def cwd(self) -> Path:
         """终端当前所在的目录。"""
+
         return self._cwd
 
     def set_cwd(self, path) -> None:
         """换工作目录（下一条命令就在新目录里跑）。"""
+
         if not path:
             return
         path = Path(path)
@@ -307,14 +342,19 @@ class TerminalWidget(QtWidgets.QWidget):
 
     def set_script_dir(self, path) -> None:
         """IDE 打开的脚本文件夹 —— "转到脚本目录"按钮用的就是这个。"""
+
         self.script_dir = Path(path) if path else None
         self.btn_script_dir.setEnabled(self.script_dir is not None)
 
     def goto_script_dir(self) -> None:
+        """把工作目录切回 IDE 正在编辑的那一文件夹。"""
+
         if self.script_dir is not None:
             self.set_cwd(self.script_dir)
 
     def pick_dir(self) -> None:
+        """弹出目录选择框，换工作目录。"""
+
         folder = QtWidgets.QFileDialog.getExistingDirectory(
             self, "选择终端工作目录", str(self._cwd))
         if folder:
@@ -322,17 +362,21 @@ class TerminalWidget(QtWidgets.QWidget):
 
     def prompt_text(self) -> str:
         """提示符：Windows 用 >，别的平台用 $。"""
+
         if os.name == "nt":
             return f"{self._cwd}>"
         return f"{self._cwd}$ "
 
     def _update_prompt(self) -> None:
+        """刷新提示符与目录标签。"""
+
         self.prompt_label.setText(self.prompt_text())
         self.dir_label.setText(f"工作目录：{self._cwd}")
 
     # ------------------------------------------------------------------ 输入
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         """上下键翻历史，Ctrl+C 中断，Ctrl+L 清屏。"""
+
         if obj is self.input and event.type() == QtCore.QEvent.Type.KeyPress:
             key = event.key()
             ctrl = bool(event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier)
@@ -351,6 +395,8 @@ class TerminalWidget(QtWidgets.QWidget):
         return super().eventFilter(obj, event)
 
     def _history_move(self, delta: int) -> None:
+        """在历史记录里前后翻；翻到最下面就回到空输入。"""
+
         if not self._history:
             return
         index = max(0, min(len(self._history), self._history_index + delta))
@@ -362,6 +408,7 @@ class TerminalWidget(QtWidgets.QWidget):
 
     def submit(self) -> None:
         """回车：执行当前输入。"""
+
         text = self.input.text()
         self.input.clear()
         if not text.strip():
@@ -373,6 +420,7 @@ class TerminalWidget(QtWidgets.QWidget):
 
     def run_command(self, text: str) -> None:
         """跑一条命令。"""
+
         if self._thread is not None and self._thread.isRunning():
             self._append("（上一条命令还在跑，Ctrl+C 可以中断）\n")
             return
@@ -380,12 +428,14 @@ class TerminalWidget(QtWidgets.QWidget):
         thread.output.connect(self._on_output)
         thread.cwdFound.connect(self._on_cwd_found)
         thread.commandDone.connect(self._on_command_done)
+        # 线程跑完就销毁，别让 QThread 对象越攒越多
         thread.finished.connect(thread.deleteLater)
         self._thread = thread
         thread.start()
 
     def interrupt(self) -> None:
         """Ctrl+C：把正在跑的命令连同子进程一起砍掉。"""
+
         thread = self._thread
         if thread is None or not thread.isRunning():
             self._append("^C\n")
@@ -395,9 +445,13 @@ class TerminalWidget(QtWidgets.QWidget):
 
     # ------------------------------------------------------------------ 输出
     def _on_output(self, text: str) -> None:
+        """收到后台线程送来的输出，追加到记录区。"""
+
         self._append(text)
 
     def _on_cwd_found(self, path_text: str) -> None:
+        """收到探针回读的目录，更新工作目录。"""
+
         if not path_text:
             return
         path = Path(path_text)
@@ -408,6 +462,8 @@ class TerminalWidget(QtWidgets.QWidget):
             self._local_cd(path_text)
 
     def _on_command_done(self, code: int) -> None:
+        """命令结束：记下退出码，清掉线程引用。"""
+
         self.last_exit_code = code
         self._ensure_newline()
         if self._thread is not None:
@@ -415,6 +471,7 @@ class TerminalWidget(QtWidgets.QWidget):
 
     def _local_cd(self, target: str) -> None:
         """命令没带出目录标记时，按 cd 自己算。"""
+
         match = _CD_RE.match(target)
         if not match:
             return
@@ -433,15 +490,20 @@ class TerminalWidget(QtWidgets.QWidget):
 
     def _echo(self, text: str) -> None:
         """把敲进去的命令回显到记录里，像真的终端那样。"""
+
         self._ensure_newline()
         self._append(self.prompt_text() + text + "\n")
 
     def _ensure_newline(self) -> None:
+        """记录区最后一行还没换行的话，先补一个换行。"""
+
         block = self.transcript.document().lastBlock()
         if block.isValid() and block.text():
             self._append("\n")
 
     def _append(self, text: str) -> None:
+        """往记录区末尾追加文字。"""
+
         cursor = self.transcript.textCursor()
         cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
         cursor.insertText(text)
@@ -450,6 +512,7 @@ class TerminalWidget(QtWidgets.QWidget):
 
     def clear(self) -> None:
         """清屏（不动工作目录）。"""
+
         self.transcript.clear()
 
     def shutdown(self) -> None:
@@ -457,6 +520,7 @@ class TerminalWidget(QtWidgets.QWidget):
 
         不停的话 QThread 会在运行中被析构，Qt 会直接崩掉。
         """
+
         thread = self._thread
         if thread is None:
             return
@@ -465,4 +529,6 @@ class TerminalWidget(QtWidgets.QWidget):
         self._thread = None
 
     def focus_input(self) -> None:
+        """把焦点挪到输入框（切到终端页时用）。"""
+
         self.input.setFocus()

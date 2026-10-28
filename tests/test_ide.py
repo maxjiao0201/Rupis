@@ -1,6 +1,14 @@
 """Rupis IDE 的自动化测试。
 
 用 Qt 的 offscreen 平台跑，不需要真实显示器。
+
+文件分成四块：
+    TestIDE                —— IDE 主窗口与代码编辑器：括号补全、注释切换、
+                              补全、查找替换、整行操作、提示、字号、控制台、
+                              底部面板、脚本列表、查找面板、主题与运行。
+    TestSyntaxVocabulary   —— 高亮词表本身：关键字、元件、常量与说明文字。
+    TestTerminal           —— 终端页：执行命令、切换目录、中断与历史。
+    TestTerminalCommandLine —— 命令行拼接的纯字符串测试，不真的跑命令。
 """
 
 from __future__ import annotations
@@ -33,9 +41,13 @@ class TestIDE(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        """整个测试类共用一个 QApplication 实例（Qt 不允许有多个）。"""
+
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
+        """每个用例都开一个全新的 IDE 窗口，并清掉上一轮留下的设置。"""
+
         import rupis.ide.app as appmod
         from rupis.ide.app import RupisIDE
 
@@ -51,6 +63,8 @@ class TestIDE(unittest.TestCase):
         self.ed = self.win.editor
 
     def tearDown(self) -> None:
+        """关掉窗口，不留下悬空的控件。"""
+
         # 关闭前先清掉"已修改"标记，否则 closeEvent 会弹模态框问要不要保存
         self.win.editor.document().setModified(False)
         self.win.close()
@@ -59,9 +73,13 @@ class TestIDE(unittest.TestCase):
 
     # ------------------------------------------------------------ 工具
     def press(self, key, text="", mod=Qt.KeyboardModifier.NoModifier) -> None:
+        """模拟按下一个按键。"""
+
         self.ed.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, key, mod, text))
 
     def at_end(self) -> None:
+        """把光标移到文末。"""
+
         self.ed.moveCursor(QTextCursor.MoveOperation.End)
 
     def at(self, line: int, col: int = 1) -> None:
@@ -70,6 +88,8 @@ class TestIDE(unittest.TestCase):
 
     # ------------------------------------------------------------ 编辑器
     def test_bracket_auto_close(self):
+        """输入左括号时自动补上右括号，光标停在两个括号中间。"""
+
         self.ed.setPlainText("")
         self.at_end()
         self.press(Qt.Key.Key_ParenLeft, "(")
@@ -77,6 +97,8 @@ class TestIDE(unittest.TestCase):
         self.assertEqual(self.ed.textCursor().position(), 1)
 
     def test_bracket_skip_closer(self):
+        """紧接着再按右括号时直接跳过，不重复插入一个。"""
+
         self.ed.setPlainText("")
         self.at_end()
         self.press(Qt.Key.Key_ParenLeft, "(")
@@ -85,18 +107,24 @@ class TestIDE(unittest.TestCase):
         self.assertEqual(self.ed.textCursor().position(), 2)
 
     def test_enter_auto_indent_after_brace(self):
+        """在 { 后回车会自动缩进一级，方便接着写块内容。"""
+
         self.ed.setPlainText("def f():{")
         self.at_end()
         self.press(Qt.Key.Key_Return, "\r")
         self.assertEqual(self.ed.toPlainText(), "def f():{\n    ")
 
     def test_enter_keeps_indent(self):
+        """回车时保留上一行的缩进，不多不少。"""
+
         self.ed.setPlainText("    rw{rsig=1}[0,0,0]")
         self.at_end()
         self.press(Qt.Key.Key_Return, "\r")
         self.assertEqual(self.ed.toPlainText(), "    rw{rsig=1}[0,0,0]\n    ")
 
     def test_tab_indents_selection(self):
+        """有选区时按 Tab，给选区每一行都加一级缩进。"""
+
         self.ed.setPlainText("rw{rsig=1}[0,0,0]\nrw{rsig=2}[1,0,0]")
         self.ed.selectAll()
         self.press(Qt.Key.Key_Tab, "\t")
@@ -104,18 +132,24 @@ class TestIDE(unittest.TestCase):
                          "    rw{rsig=1}[0,0,0]\n    rw{rsig=2}[1,0,0]")
 
     def test_shift_tab_outdents_selection(self):
+        """Shift+Tab 给选区每一行都减一级缩进。"""
+
         self.ed.setPlainText("    a\n    b")
         self.ed.selectAll()
         self.press(Qt.Key.Key_Backtab, "")
         self.assertEqual(self.ed.toPlainText(), "a\nb")
 
     def test_tab_without_selection_inserts_spaces(self):
+        """没有选区时 Tab 插入 4 个空格，而不是缩进整行。"""
+
         self.ed.setPlainText("x")
         self.at_end()
         self.press(Qt.Key.Key_Tab, "\t")
         self.assertEqual(self.ed.toPlainText(), "x    ")
 
     def test_toggle_comment(self):
+        """切换注释：已注释的恢复原样，没注释的加上 //。"""
+
         self.ed.setPlainText("rw{rsig=1}[0,0,0]\nrw{rsig=2}[1,0,0]")
         self.ed.selectAll()
         self.ed._toggle_comment()
@@ -127,6 +161,8 @@ class TestIDE(unittest.TestCase):
                          "rw{rsig=1}[0,0,0]\nrw{rsig=2}[1,0,0]")
 
     def test_completion_includes_user_definitions(self):
+        """补全列表里要同时有用户定义的模板名、内置关键字和元件名。"""
+
         self.ed.setPlainText("strudef my_unit(facing):{\n}\n")
         self.ed.refresh_definitions()
         words = self.ed._completer.model().stringList()
@@ -152,6 +188,8 @@ class TestIDE(unittest.TestCase):
         return Path(tmp)
 
     def test_lib_file_is_scanned(self):
+        """设好 lib 路径后，编辑器要能扫到里面的 .rpi 文件。"""
+
         self.make_lib()
         self.ed.setPlainText("lib util\n")
         files = self.ed._lib_files()
@@ -159,17 +197,23 @@ class TestIDE(unittest.TestCase):
         self.assertEqual(files["util"].name, "util.rpi")
 
     def test_lib_file_with_alias(self):
+        """写了 as 别名时，补全用的模块名是别名而不是原名。"""
+
         self.make_lib()
         self.ed.setPlainText("lib util as u\n")
         self.assertEqual(list(self.ed._lib_files()), ["u"])
 
     def test_lib_file_in_subdirectory(self):
+        """子目录里的脚本也要被扫到，模块名仍然只取文件名。"""
+
         self.make_lib("sub/util.rpi")
         self.ed.setPlainText("lib sub/util\n")
         files = self.ed._lib_files()
         self.assertEqual(list(files), ["util"])
 
     def test_member_completion_lists_script_members(self):
+        """在 模块名. 后面补全时，要列出该脚本里的函数与结构模板。"""
+
         self.make_lib()
         self.ed.setPlainText("lib util\nutil.he")
         self.at_end()
@@ -181,6 +225,8 @@ class TestIDE(unittest.TestCase):
         self.assertEqual(prefix, "he")
 
     def test_member_completion_uses_alias(self):
+        """用了别名就按别名去做成员补全。"""
+
         self.make_lib()
         self.ed.setPlainText("lib util as u\nu.he")
         self.at_end()
@@ -189,18 +235,24 @@ class TestIDE(unittest.TestCase):
         self.assertEqual(prefix, "he")
 
     def test_member_completion_ignores_unknown_script(self):
+        """模块名不在 lib 里时不触发成员补全，免得凭空补出不存在的东西。"""
+
         self.make_lib()
         self.ed.setPlainText("lib nosuchscript_xyz\nnosuchscript_xyz.")
         self.at_end()
         self.assertIsNone(self.ed._member_completion())
 
     def test_member_completion_ignores_plain_word(self):
+        """光标前是普通单词（没跟点号）时不触发成员补全。"""
+
         self.make_lib()
         self.ed.setPlainText("lib util\nrw")
         self.at_end()
         self.assertIsNone(self.ed._member_completion())
 
     def test_start_completion_switches_to_script_members(self):
+        """触发补全时，如果光标在 模块名. 后面，就补该脚本的成员。"""
+
         self.make_lib()
         self.ed.setPlainText("lib util\nutil.he")
         self.at_end()
@@ -209,6 +261,8 @@ class TestIDE(unittest.TestCase):
         self.assertEqual(self.ed._completer.completionPrefix(), "he")
 
     def test_start_completion_falls_back_to_words(self):
+        """不是成员补全的场景就退回普通单词补全。"""
+
         self.make_lib()
         self.ed.setPlainText("rw")
         self.at_end()
@@ -225,6 +279,8 @@ class TestIDE(unittest.TestCase):
         self.assertIn("box", words)
 
     def test_hint_bar_explains_lib(self):
+        """光标落在 lib 上时，提示栏要说明 lib 的用法。"""
+
         self.ed.setPlainText("lib util")
         cursor = self.ed.textCursor()
         cursor.setPosition(1)
@@ -232,53 +288,71 @@ class TestIDE(unittest.TestCase):
         self.assertIn("lib", self.ed.hint_text())
 
     def test_goto_line(self):
+        """goto_line 要能把光标跳到指定的行。"""
+
         self.ed.setPlainText("a\nb\nc\nd")
         self.ed.goto_line(3)
         self.assertEqual(self.ed.textCursor().blockNumber(), 2)
 
     def test_mark_error_marks_line(self):
+        """mark_error 要把出错行记下来，供运行出错后跳转过去。"""
+
         self.ed.setPlainText("a\nb\nc")
         self.ed.mark_error(2, 1)
         self.assertEqual(self.ed._error_line, 2)
 
     # ------------------------------------------------------------ 整行操作
     def test_move_line_down(self):
+        """把当前行往下移一行。"""
+
         self.ed.setPlainText("a\nb\nc")
         self.at(1)
         self.assertTrue(self.ed.move_lines(1))
         self.assertEqual(self.ed.toPlainText(), "b\na\nc")
 
     def test_move_line_up(self):
+        """把当前行往上移一行。"""
+
         self.ed.setPlainText("a\nb\nc")
         self.at(2)
         self.assertTrue(self.ed.move_lines(-1))
         self.assertEqual(self.ed.toPlainText(), "b\na\nc")
 
     def test_move_line_up_at_top_is_noop(self):
+        """已经在第一行时上移是空操作，并且要返回 False 让调用方知道没动。"""
+
         self.ed.setPlainText("a\nb")
         self.at(1)
         self.assertFalse(self.ed.move_lines(-1))
         self.assertEqual(self.ed.toPlainText(), "a\nb")
 
     def test_move_line_down_at_bottom_is_noop(self):
+        """已经在最后一行时下移是空操作，同样要返回 False。"""
+
         self.ed.setPlainText("a\nb")
         self.at(2)
         self.assertFalse(self.ed.move_lines(1))
         self.assertEqual(self.ed.toPlainText(), "a\nb")
 
     def test_duplicate_line(self):
+        """复制当前行，副本紧跟在原行后面。"""
+
         self.ed.setPlainText("a\nb")
         self.at(1)
         self.ed.duplicate_lines()
         self.assertEqual(self.ed.toPlainText(), "a\na\nb")
 
     def test_delete_line(self):
+        """删除当前行。"""
+
         self.ed.setPlainText("a\nb\nc")
         self.at(2)
         self.ed.delete_lines()
         self.assertEqual(self.ed.toPlainText(), "a\nc")
 
     def test_delete_last_line(self):
+        """删掉最后一行时，前面剩下的内容要保留。"""
+
         self.ed.setPlainText("a\nb")
         self.at(2)
         self.ed.delete_lines()
@@ -286,26 +360,36 @@ class TestIDE(unittest.TestCase):
 
     # ------------------------------------------------------------ 查找替换
     def test_find_matches_plain(self):
+        """普通文本查找要找出全部匹配。"""
+
         self.ed.setPlainText("rw{rsig=1}\nrw{rsig=2}\nrw{rsig=3}")
         spans = self.ed.find_matches("rw")
         self.assertEqual(len(spans), 3)
 
     def test_find_matches_case_insensitive(self):
+        """默认忽略大小写，只有显式要求时才区分。"""
+
         self.ed.setPlainText("RW\nrw\nRw")
         self.assertEqual(len(self.ed.find_matches("rw")), 3)
         self.assertEqual(len(self.ed.find_matches("rw", case_sensitive=True)), 1)
 
     def test_find_matches_regex(self):
+        """正则模式下要按模式匹配，而不是按字面量。"""
+
         self.ed.setPlainText("rsig=1\nrsig=22\nrsig=333")
         spans = self.ed.find_matches(r"rsig=\d+", regex=True)
         self.assertEqual(len(spans), 3)
 
     def test_find_invalid_regex_raises(self):
+        """非法正则要抛 ValueError，而不是静默返回零结果。"""
+
         self.ed.setPlainText("abc")
         with self.assertRaises(ValueError):
             self.ed.find_matches("(unclosed", regex=True)
 
     def test_find_next_moves_cursor(self):
+        """find_next 要把光标移到并选中下一个匹配。"""
+
         self.ed.setPlainText("a\nb\na\nb")
         self.at(1)
         span = self.ed.find_next("a")
@@ -313,6 +397,8 @@ class TestIDE(unittest.TestCase):
         self.assertEqual(self.ed.textCursor().selectedText(), "a")
 
     def test_find_next_wraps_around(self):
+        """后面没有匹配时要绕回开头继续找，而不是直接失败。"""
+
         self.ed.setPlainText("x\na\nb")
         self.at(2)          # 已经过了唯一的 "a"
         span = self.ed.find_next("a")
@@ -320,23 +406,31 @@ class TestIDE(unittest.TestCase):
         self.assertEqual(span[0], 2)
 
     def test_replace_all(self):
+        """全部替换要改掉所有出现的地方，并返回替换次数。"""
+
         self.ed.setPlainText("rsig=1\nrsig=2")
         count = self.ed.replace_all("rsig", "power")
         self.assertEqual(count, 2)
         self.assertEqual(self.ed.toPlainText(), "power=1\npower=2")
 
     def test_replace_all_with_regex_backreference(self):
+        """正则替换要支持 \\1 这样的反向引用。"""
+
         self.ed.setPlainText("name=alpha\nname=beta")
         count = self.ed.replace_all(r"name=(\w+)", r"\1", regex=True)
         self.assertEqual(count, 2)
         self.assertEqual(self.ed.toPlainText(), "alpha\nbeta")
 
     def test_find_highlight_count(self):
+        """查找时高亮的匹配数要记在 match_count 上。"""
+
         self.ed.setPlainText("a\na\na")
         self.ed.find_next("a")
         self.assertEqual(self.ed.match_count, 3)
 
     def test_clear_find_highlights(self):
+        """清掉查找高亮之后，匹配数要归零。"""
+
         self.ed.setPlainText("a\na")
         self.ed.find_next("a")
         self.ed.clear_find_highlights()
@@ -344,6 +438,8 @@ class TestIDE(unittest.TestCase):
 
     # ------------------------------------------------------------ 括号配对
     def test_bracket_match_found(self):
+        """光标落在括号上时，要标出配对的那一对括号。"""
+
         self.ed.setPlainText("rw{rsig=15}[0,0,0]")
         self.at(1, 3)        # 光标落在 { 上
         spans = self.ed._bracket_matches()
@@ -357,24 +453,34 @@ class TestIDE(unittest.TestCase):
 
     # ------------------------------------------------------------ 跳转定义
     def test_find_definition_of_structure(self):
+        """按名字能找到结构模板的定义行。"""
+
         self.ed.setPlainText("strudef unit(f):{\n}\n\nstru unit(e){}\n")
         self.assertEqual(self.ed.find_definition("unit"), 1)
 
     def test_find_definition_of_function(self):
+        """按名字能找到函数的定义行。"""
+
         self.ed.setPlainText("def go(n):{\n}\n")
         self.assertEqual(self.ed.find_definition("go"), 1)
 
     def test_find_definition_missing(self):
+        """找不到定义时返回 0（表示"没找到"）。"""
+
         self.ed.setPlainText("rw{rsig=1}[0,0,0]")
         self.assertEqual(self.ed.find_definition("nothing"), 0)
 
     def test_jump_to_definition(self):
+        """在调用处触发跳转，光标要落到定义那一行上。"""
+
         self.ed.setPlainText("strudef unit(f):{\n}\n\nstru unit(e){}\n")
         self.at(4, 6)        # 光标在第 4 行的 unit 上
         self.assertTrue(self.ed.jump_to_definition())
         self.assertEqual(self.ed.textCursor().blockNumber(), 0)
 
     def test_symbol_kind(self):
+        """要能区分结构模板、函数和不认识的符号。"""
+
         self.ed.setPlainText("strudef unit(f):{\n}\ndef go():{\n}\n")
         self.assertEqual(self.ed.symbol_kind("unit"), "structure")
         self.assertEqual(self.ed.symbol_kind("go"), "function")
@@ -382,11 +488,15 @@ class TestIDE(unittest.TestCase):
 
     # ------------------------------------------------------------ 提示
     def test_hint_for_keyword(self):
+        """光标在关键字上时，给出对应的中文说明。"""
+
         self.ed.setPlainText("def go():{")
         self.at(1, 1)
         self.assertIn("函数", self.ed.hint_text())
 
     def test_hint_for_element(self):
+        """光标在元件名上时，给出元件的中文说明。"""
+
         self.ed.setPlainText("rw{rsig=15}[0,0,0]")
         self.at(1, 1)
         self.assertIn("红石粉", self.ed.hint_text())

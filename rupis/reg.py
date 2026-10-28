@@ -1,13 +1,21 @@
+"""Windows 文件关联注册：把 .rpi 脚本和 Rupis 解释器绑在一起。
+
+注册之后，双击 .rpi 文件就会用 Rupis 打开，资源管理器里还会显示自定义图标。
+
+只写 HKCU\\Software\\Classes，不需要管理员权限。
+注意：本模块依赖 winreg 和 subprocess，只能在 Windows 上使用。
+"""
+
 import winreg
 import subprocess
 import os
 import sys
 
 # ===================== 在这里修改配置 =====================
-ext = ".rpi"
-progid = "MinecraftRupisFileType"
-display_name = "Rupis脚本文件"
-icon_filename = "rupis.ico"
+ext = ".rpi"                          # 要关联的文件后缀
+progid = "MinecraftRupisFileType"     # ProgID，注册表里代表这一类文件的名字
+display_name = "Rupis脚本文件"          # 资源管理器里显示的类型名
+icon_filename = "rupis.ico"           # 图标文件，放在 rupis 包目录里
 # ==========================================================
 
 def is_frozen() -> bool:
@@ -21,6 +29,8 @@ def open_command() -> str:
 
     打包成 exe 时，sys.executable 就是 rupis.exe 自己；
     直接跑源码时是 python + main.py。
+
+    %1 由 Windows 在双击时替换成被双击文件的完整路径，路径含空格时要加引号。
     """
 
     if is_frozen():
@@ -32,7 +42,10 @@ def open_command() -> str:
 
 
 def icon_path() -> str:
-    """.rpi 文件的图标。打包后图标就在 exe 里。"""
+    """.rpi 文件的图标。打包后图标就在 exe 里。
+
+    返回 "<图标文件路径>,<序号>"，序号 0 表示用文件里的第一个图标。
+    """
 
     if is_frozen():
         return f"{sys.executable},0"
@@ -41,7 +54,10 @@ def icon_path() -> str:
 
 
 def _restart_explorer():
-    """重启Windows资源管理器，刷新文件类型显示"""
+    """重启Windows资源管理器，刷新文件类型显示
+
+    资源管理器缓存了文件类型的图标和打开方式，不重启的话新注册的图标不会立刻生效。
+    """
     try:
         subprocess.run(["taskkill", "/f", "/im", "explorer.exe"], check=True)
         subprocess.Popen(["explorer.exe"])
@@ -51,7 +67,14 @@ def _restart_explorer():
 
 
 def init():
-    """注册 .rpi 文件类型、图标、双击打开"""
+    """注册 .rpi 文件类型、图标、双击打开
+
+    往注册表里写这四个位置：
+        HKCU\\Software\\Classes\\.rpi                            —— 后缀指向 ProgID；
+        HKCU\\Software\\Classes\\<ProgID>                        —— 类型显示名；
+        HKCU\\Software\\Classes\\<ProgID>\\DefaultIcon            —— 图标；
+        HKCU\\Software\\Classes\\<ProgID>\\shell\\open\\command   —— 双击时执行的命令。
+    """
     icon = icon_path()
     open_cmd = open_command()
 
@@ -62,6 +85,7 @@ def init():
 
     try:
         # 1. 后缀关联到 ProgID
+        # 值写在默认项（空名字）上，Windows 就是靠它知道 .rpi 属于哪一类
         with winreg.CreateKey(hkcu, f"{base}\\{ext}") as key:
             winreg.SetValue(key, "", winreg.REG_SZ, progid)
 

@@ -3,6 +3,21 @@
 QPlainTextEdit 子类，左侧自己画行号（经典的 LineNumberArea 做法），
 另外负责：自动缩进、Tab/Shift+Tab 整块缩进、括号自动配对、当前行高亮、Ctrl+Space 补全，
 以及括号配对高亮、查找替换、跳转到定义、整行搬移、字号缩放、右键菜单。
+
+编辑器提供的能力：
+    * 行号槽：左侧自绘，点行号直接跳行；
+    * 当前行高亮 + 括号配对高亮（跳过字符串与注释里的括号）；
+    * 出错行整行标红；
+    * 查找命中的片段高亮；
+    * 自动缩进：回车继承上一行缩进，行尾是 { 时再多缩进一级；
+    * Tab / Shift+Tab：整块缩进与反缩进；
+    * 括号自动配对：打左括号自动补右括号，打右括号时跳过已经存在的那一个；
+    * 自动补全：词表 = 语言内置词 + 脚本里自己定义的结构 / 函数
+      + lib 导入脚本里的成员，写成 脚本名. 时补全该脚本的成员；
+    * Ctrl+/ 注释 / 取消注释；
+    * Alt+↑ / Alt+↓ 整行搬移，Ctrl+Shift+D 复制行，Ctrl+Shift+K 删除行；
+    * F12 跳转到定义；
+    * Ctrl+= / Ctrl+- / Ctrl+0 缩放字号。
 """
 
 from __future__ import annotations
@@ -41,25 +56,38 @@ FONT_MIN = 8
 FONT_MAX = 28
 FONT_STEP = 1
 
-Span = Tuple[int, int]
+Span = Tuple[int, int]  # (起点, 终点)，都是文档里的绝对位置
 
 
 class LineNumberArea(QtWidgets.QWidget):
-    """行号槽，画在编辑器左边。"""
+    """行号槽，画在编辑器左边。
+
+    它本身不存任何数据，画什么、点到哪一行都问编辑器（editor）。
+    """
 
     def __init__(self, editor: "RupisEditor") -> None:
         super().__init__(editor)
         self.editor = editor
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        """绘制行号：真正的画法在编辑器的 paint_line_numbers 里。"""
+
         self.editor.paint_line_numbers(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        """点行号 → 让编辑器把光标挪到那一行。"""
+
         self.editor.line_number_clicked(event)
 
 
 class RupisEditor(QtWidgets.QPlainTextEdit):
-    """Rupis 脚本编辑器。"""
+    """Rupis 脚本编辑器。
+
+    信号：
+        hintChanged    光标移动或补全预览变化时，把提示文字抛给主窗口
+        findRequested  右键菜单里点了"查找"
+        escapePressed  按下 Esc（用来收起查找面板）
+    """
 
     # 光标移动 / 补全预览时把提示文字抛给主窗口显示
     hintChanged = QtCore.pyqtSignal(str)
@@ -106,6 +134,8 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     # ================================================================ 主题
     def apply_theme(self, theme: Dict[str, str]) -> None:
+        """换主题：调色板、语法高亮、行号槽一起刷。"""
+
         self.theme = theme
         palette = self.palette()
         palette.setColor(QtGui.QPalette.ColorRole.Base, QtGui.QColor(theme["bg"]))
@@ -119,9 +149,13 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     # ================================================================ 行号
     def _update_ln_width(self) -> None:
+        """行数变了就重算行号槽宽度，把它让出来的位置告诉视口。"""
+
         self.setViewportMargins(self._ln_width(), 0, 0, 0)
 
     def _update_ln_area(self, rect, dy) -> None:
+        """跟随视口滚动同步行号槽。"""
+
         if dy:
             self.ln_area.scroll(0, dy)
         else:
@@ -130,10 +164,14 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
             self._update_ln_width()
 
     def _ln_width(self) -> int:
+        """行号槽的宽度：按最大行号的位数算。"""
+
         digits = max(2, len(str(max(1, self.blockCount()))))
         return 12 + self.fontMetrics().horizontalAdvance("9") * digits
 
     def resizeEvent(self, event) -> None:  # noqa: N802
+        """编辑器尺寸变了，行号槽跟着占满左侧。"""
+
         super().resizeEvent(event)
         rect = self.contentsRect()
         self.ln_area.setGeometry(
@@ -141,6 +179,8 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         )
 
     def paint_line_numbers(self, event) -> None:
+        """把可见范围内的行号画出来（当前行不画，让当前行高亮盖住）。"""
+
         painter = QtGui.QPainter(self.ln_area)
         painter.fillRect(event.rect(), QtGui.QColor(self.theme["gutter_bg"]))
         painter.setFont(self.font())
@@ -165,6 +205,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def line_number_clicked(self, event) -> None:
         """点行号跳到那一行。"""
+
         block = self.firstVisibleBlock()
         top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
         height = self.blockBoundingRect(block).height()
@@ -179,10 +220,14 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     # ================================================================ 高亮
     def _on_cursor_moved(self) -> None:
+        """光标一动就刷新当前行高亮，并更新提示栏文字。"""
+
         self._highlight_current_line()
         self.hintChanged.emit(self.hint_text())
 
     def _highlight_current_line(self) -> None:
+        """重画所有额外高亮：当前行、查找命中、出错行、括号配对。"""
+
         selections = []
         if not self.isReadOnly():
             sel = QtWidgets.QTextEdit.ExtraSelection()
@@ -234,6 +279,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     # ================================================================ 错误标记
     def mark_error(self, line: int = 0, col: int = 0) -> None:
         """标记出错的行与列。"""
+
         if line and line <= self.blockCount():
             block = self.document().findBlockByLineNumber(line - 1)
             pos = block.position() + max(col - 1, 0)
@@ -245,6 +291,8 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         self._highlight_current_line()
 
     def clear_error(self) -> None:
+        """取消出错行标记。"""
+
         self._error_line = 0
         self._error_pos = 0
         self._highlight_current_line()
@@ -254,6 +302,8 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     # ================================================================ 编辑
     def keyPressEvent(self, event) -> None:  # noqa: N802
+        """键盘事件的入口：先拦下自己处理的组合键，剩下的交给 Qt 默认处理。"""
+
         key = event.key()
         modifiers = event.modifiers()
 
@@ -350,20 +400,27 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         super().keyPressEvent(event)
 
     def insertPlainText(self, text: str) -> None:  # noqa: N802
+        """插入纯文本（Tab 缩进走这里）。"""
+
         super().insertPlainText(text)
         self._after_edit()
 
     def setPlainText(self, text: str) -> None:  # noqa: N802
+        """整体替换文档内容。"""
+
         # setPlainText 不会走 insertPlainText，得自己收尾
         super().setPlainText(text)
         self._after_edit()
 
     def _after_edit(self) -> None:
+        """编辑过之后重新扫一遍定义，好让补全词表跟上。"""
+
         self.refresh_definitions()
 
     # ================================================================ 行操作
     def _selected_lines(self) -> Tuple[int, int]:
         """返回选中范围覆盖的行号区间 (首行, 末行)，行号从 1 开始。"""
+
         cursor = self.textCursor()
         start = cursor.selectionStart()
         end = cursor.selectionEnd()
@@ -374,6 +431,8 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         return first_block.blockNumber() + 1, last_block.blockNumber() + 1
 
     def _get_lines(self, first: int, last: int) -> List[str]:
+        """取出第 first..last 行的文本（不含行尾换行）。"""
+
         block = self.document().findBlockByNumber(first - 1)
         lines = []
         for _ in range(first, last + 1):
@@ -384,6 +443,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     def _replace_lines(self, first: int, last: int, new_lines: List[str],
                        *, eat_newline: bool = False) -> None:
         """把第 first..last 行整体替换成 new_lines。"""
+
         if first > last:
             return
         first_block = self.document().findBlockByNumber(first - 1)
@@ -404,6 +464,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def _select_line(self, line: int) -> None:
         """把光标放到第 line 行上（不选中，只定位）。"""
+
         block = self.document().findBlockByNumber(max(line - 1, 0))
         if not block.isValid():
             return
@@ -414,6 +475,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def move_lines(self, delta: int) -> bool:
         """把选中的行整体上移（delta=-1）或下移（delta=1）一行。"""
+
         if delta == 0:
             return False
         first, last = self._selected_lines()
@@ -436,6 +498,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def duplicate_lines(self) -> bool:
         """复制选中的行到下面一份。"""
+
         first, last = self._selected_lines()
         lines = self._get_lines(first, last)
         self._replace_lines(first, last, lines + lines)
@@ -444,6 +507,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def delete_lines(self) -> bool:
         """删掉选中的行。"""
+
         first, last = self._selected_lines()
         self._replace_lines(first, last, [], eat_newline=True)
         remaining = max(self.blockCount(), 1)
@@ -453,8 +517,10 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     # ================================================================ 缩进
     def _toggle_comment(self) -> None:
         """选中行批量加 / 去 // 注释。"""
+
         first, last = self._selected_lines()
         lines = self._get_lines(first, last)
+        # 全都注释过了就整体取消，否则整体加上
         all_commented = all(line.strip().startswith("//") or not line.strip()
                             for line in lines)
         new_lines = []
@@ -468,9 +534,12 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         self._replace_lines(first, last, new_lines)
 
     def _indent_selection(self, *, dedent: bool) -> None:
+        """整块缩进（dedent=False）或反缩进（dedent=True）。"""
+
         first, last = self._selected_lines()
         lines = self._get_lines(first, last)
         if dedent:
+            # 优先整整块 INDENT 去掉，没有就只去掉一个空格
             new_lines = [
                 line[len(INDENT):] if line.startswith(INDENT)
                 else (line[1:] if line.startswith(" ") else line)
@@ -483,6 +552,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     # ================================================================ 补全
     def refresh_definitions(self) -> None:
         """扫描脚本里的结构名 / 函数名，加进补全词表。"""
+
         text = self.toPlainText()
         names = sorted(set(DEF_RE.findall(text)))
         # lib 导入的脚本里的名字也能直接补出来
@@ -573,6 +643,11 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         return members, prefix
 
     def _start_completion(self) -> None:
+        """Ctrl+Space：弹出补全列表。
+
+        光标前面是 ``脚本名.`` 时补该脚本的成员，否则补普通词表。
+        """
+
         self.refresh_definitions()
         members = self._member_completion()
         if members is not None:
@@ -591,6 +666,8 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         self._completer.complete(self.cursorRect())
 
     def _insert_completion(self, completion: str) -> None:
+        """用户从补全列表里选了一个词，把它替换进文档。"""
+
         cursor = self.textCursor()
         cursor.select(QtGui.QTextCursor.SelectionType.WordUnderCursor)
         cursor.insertText(completion)
@@ -598,6 +675,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def _on_completion_previewed(self, index) -> None:
         """下拉框里高亮到某个词时，提示栏跟着显示它的说明。"""
+
         if index is None or not index.isValid():
             return
         word = str(index.data())
@@ -608,6 +686,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     def find_matches(self, needle: str, *, case_sensitive: bool = False,
                      regex: bool = False) -> List[Span]:
         """返回所有匹配区间；正则非法时抛 ValueError。"""
+
         text = self.toPlainText()
         if not needle:
             return []
@@ -635,18 +714,25 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         return out
 
     def set_find_highlights(self, matches: List[Span]) -> None:
+        """设置要高亮的命中区间。"""
+
         self._find_matches = list(matches)
         self._highlight_current_line()
 
     @property
     def match_count(self) -> int:
         """当前高亮的命中数量。"""
+
         return len(self._find_matches)
 
     def clear_find_highlights(self) -> None:
+        """清掉查找命中的高亮。"""
+
         self.set_find_highlights([])
 
     def select_span(self, start: int, end: int) -> None:
+        """选中 (start, end) 这段文本，并把视图滚到它那儿。"""
+
         cursor = QtGui.QTextCursor(self.document())
         cursor.setPosition(start)
         cursor.setPosition(end, QtGui.QTextCursor.MoveMode.KeepAnchor)
@@ -656,6 +742,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     def find_next(self, needle: str, *, case_sensitive: bool = False,
                   regex: bool = False, backward: bool = False) -> Optional[Span]:
         """跳到下一个（或上一个）匹配处，返回命中的区间；没有则返回 None。"""
+
         matches = self.find_matches(needle, case_sensitive=case_sensitive, regex=regex)
         self.set_find_highlights(matches)
         if not matches:
@@ -676,6 +763,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     def replace_current(self, needle: str, replacement: str, *,
                         case_sensitive: bool = False, regex: bool = False) -> bool:
         """替换当前选中的那一处；选中的不是匹配项时，先跳到下一个。"""
+
         matches = self.find_matches(needle, case_sensitive=case_sensitive, regex=regex)
         self.set_find_highlights(matches)
         if not matches:
@@ -698,6 +786,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     def replace_all(self, needle: str, replacement: str, *,
                     case_sensitive: bool = False, regex: bool = False) -> int:
         """替换全部匹配，返回替换次数。"""
+
         matches = self.find_matches(needle, case_sensitive=case_sensitive, regex=regex)
         if not matches:
             return 0
@@ -711,6 +800,8 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def _replace_span(self, span: Span, replacement: str, needle: str,
                       case_sensitive: bool, regex: bool) -> None:
+        """把一段命中的文本换成新内容（正则时要先展开反向引用）。"""
+
         text = self.toPlainText()
         expanded = replacement
         if regex:
@@ -725,6 +816,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     def _expand_replacement(text: str, pattern: str, span: Span,
                             replacement: str, case_sensitive: bool) -> str:
         """正则模式下展开 \\1 这样的反向引用。"""
+
         try:
             rx = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
         except re.error:
@@ -743,6 +835,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
         做括号配对时得跳过字符串和注释，否则 "{" 这种字符会算错深度。
         """
+
         text = self.toPlainText()
         cached, stripped = self._code_cache
         if cached == text:
@@ -753,6 +846,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def _bracket_matches(self) -> List[Span]:
         """返回光标两侧配对括号的区间（找不到就是空列表）。"""
+
         cursor = self.textCursor()
         pos = cursor.position()
         code = self._code_text()
@@ -774,6 +868,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     @staticmethod
     def _match_bracket(code: str, pos: int) -> Optional[int]:
         """在"去注释去字符串"的文本里找 pos 处括号的配对位置。"""
+
         ch = code[pos]
         if ch in PAIRS:
             depth = 0
@@ -802,6 +897,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     # ================================================================ 跳转定义
     def word_at(self, pos: int) -> str:
         """取 pos 处的单词。"""
+
         text = self.toPlainText()
         pos = max(0, min(pos, len(text)))
         start = pos
@@ -814,6 +910,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def symbol_kind(self, name: str) -> str:
         """name 是结构（structure）、函数（function）还是普通标识符（""）。"""
+
         text = self.toPlainText()
         if re.search(r"^\s*strudef\s+" + re.escape(name) + r"\b", text, re.MULTILINE):
             return "structure"
@@ -823,6 +920,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def find_definition(self, name: str) -> int:
         """返回 name 的定义所在行号（从 1 开始），找不到返回 0。"""
+
         text = self.toPlainText()
         for regex in (STRUCT_RE, FUNC_RE):
             for m in regex.finditer(text):
@@ -832,6 +930,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def jump_to_definition(self) -> bool:
         """跳到光标处单词的定义处。"""
+
         name = self.word_at(self.textCursor().position())
         if not name:
             return False
@@ -846,6 +945,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     # ================================================================ 提示
     def hint_text(self) -> str:
         """光标处的提示文字。"""
+
         pos = self.textCursor().position()
         word = self.word_at(pos)
         if word:
@@ -869,6 +969,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
     def _element_in_state_slot(self, pos: int) -> Optional[str]:
         """光标是否落在某个元件的状态槽里？是的话返回该元件名。"""
+
         code = self._code_text()
         pos = max(0, min(pos, len(code)))
         open_idx = code.rfind("{", 0, pos)
@@ -886,25 +987,37 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
     # ================================================================ 字号
     @property
     def font_size(self) -> int:
+        """当前字号。"""
+
         return self._font_size
 
     def set_font_size(self, size: int) -> None:
+        """设置字号（限制在 FONT_MIN ~ FONT_MAX 之间）。"""
+
         self._font_size = max(FONT_MIN, min(FONT_MAX, int(size)))
         self.setFont(QtGui.QFont("Consolas", self._font_size))
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(" "))
         self._update_ln_width()
 
     def zoom_in(self) -> None:
+        """字号放大一档。"""
+
         self.set_font_size(self._font_size + FONT_STEP)
 
     def zoom_out(self) -> None:
+        """字号缩小一档。"""
+
         self.set_font_size(self._font_size - FONT_STEP)
 
     def reset_zoom(self) -> None:
+        """字号回到默认值 11。"""
+
         self.set_font_size(11)
 
     # ================================================================ 右键菜单
     def contextMenuEvent(self, event) -> None:  # noqa: N802
+        """右键菜单：Qt 自带的那几项之外，再加三个 Rupis 特有的。"""
+
         menu = self.createStandardContextMenu()
         menu.addSeparator()
         act_def = menu.addAction("跳转到定义  (F12)")
@@ -913,11 +1026,14 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         act_comment.triggered.connect(self._toggle_comment)
         act_find = menu.addAction("查找…  (Ctrl+F)")
         act_find.triggered.connect(self.findRequested.emit)
+        # PyQt6 把 exec 改名成 exec_，这里兼容一下
         runner = getattr(menu, "exec", None) or getattr(menu, "exec_")
         runner(event.globalPos())
 
     # ================================================================ 其它
     def goto_line(self, line: int, col: int = 1) -> None:
+        """把光标挪到第 line 行第 col 列，并把那一行滚到视野中间。"""
+
         block = self.document().findBlockByLineNumber(max(line - 1, 0))
         if not block.isValid():
             return
@@ -933,6 +1049,7 @@ def _strip_comments_and_strings(text: str) -> str:
 
     括号配对、状态槽判断都靠它，避免字符串里的括号算进嵌套层数。
     """
+
     out = list(text)
     i = 0
     n = len(text)
@@ -948,6 +1065,7 @@ def _strip_comments_and_strings(text: str) -> str:
             j = text.find("*/", i + 2)
             j = n if j == -1 else j + 2
             while i < j:
+                # 换行留着，否则行号会算错
                 if text[i] != "\n":
                     out[i] = " "
                 i += 1

@@ -1,6 +1,20 @@
 """Rupis 语言的词表。
 
 高亮、补全、帮助提示都从这里取数据，改语言只要改这一个文件。
+
+这张表就是 IDE 的"语言知识库"：编译器那边只管按语法执行、不管提示，
+"这个词长什么样、能不能用在哪个元件上"这类知识全在这里。
+所以要支持一门新语言的词法提示，只需要改这个文件，
+高亮器、补全器、提示栏都不用动。
+
+表与表之间的关系：
+    KEYWORDS        关键字（if / for / def ……）
+    CONSTANTS       内置常量（方向、坐标轴、比较器模式、布尔）
+    ELEMENTS        红石元件指令（rw / rrep / rco ……）
+    ELEMENT_STATES  元件 → 它能带的状态键
+    HINTS           单词 → 一行中文说明，提示栏和补全下拉共用
+    ALL_WORDS       上面三类合起来排序后的总词表，补全的基础词
+    KEY_OWNERS      反查表：状态键 → 能用它的元件
 """
 
 from __future__ import annotations
@@ -85,6 +99,7 @@ HINTS: Dict[str, str] = {
     "true": "布尔真", "false": "布尔假",
 }
 
+# 补全的总词表：关键字、常量、元件合起来去重排序
 ALL_WORDS: List[str] = sorted(KEYWORDS | CONSTANTS | ELEMENTS)
 
 # 状态键 → 能用它的元件（反查表，给"这个键是什么意思"的提示用）
@@ -95,7 +110,10 @@ for _elem, _keys in ELEMENT_STATES.items():
 
 
 def classify(word: str) -> str:
-    """给一个单词分类：kw / elem / const / ''。"""
+    """给一个单词分类：kw / elem / const / ''。
+
+    返回的短码跟 theme.py 里配色字典的键一一对应，高亮器拿它直接取颜色。
+    """
 
     if word in KEYWORDS:
         return "kw"
@@ -140,5 +158,6 @@ def describe_element(element: str) -> str:
 
     hint = HINTS.get(element)
     if hint:
+        # HINTS 里的写法是"前半句——后半句"，只要前半句
         return hint.split("——")[0].strip()
     return ""

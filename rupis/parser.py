@@ -4,6 +4,28 @@
   * 状态块紧贴指令名书写：rw{rsig=15}[dpos + x1]
   * 状态块可以省略（None）与显式写空（{}）必须区分——语义不同
   * 坐标偏移 dpos + x1 / x-2,y1,z0 / xi（xi 表示 x + 变量 i）
+
+整体结构：
+  * 顶层是一个 while 循环，反复调用 parse_statement 把 token 流切成语句；
+  * 每种语句关键字都有对应的 _parse_xxx 方法，由 parse_statement 里的
+    分发表按关键字查表分发；
+  * 表达式按优先级拆成一串 parse_xxx 方法（见"表达式"一节），
+    每一层负责一种运算符，靠互相调用形成优先级。
+
+语句一览：
+    dpos 名称[x,y,z]              声明坐标变量
+    drp 名称{键=值}               声明状态模板变量
+    lib 脚本名 [as 别名]           导入别的 .rpi 脚本
+    let 变量名 = 表达式           声明普通变量
+    名称 = 表达式                 赋值（扩展语法）
+    if(条件):{...} else if(条件):{...} else:{...}
+    for 变量 = (起始 to 结束):{...}
+    while(条件):{...}
+    def 名称(参数):{...}          定义函数
+    strudef 名称(参数){默认状态}:{...}   定义方块模板
+    stru 名称(参数){覆盖状态}[坐标]      实例化方块模板
+    return / break / continue
+    元件名{状态槽}[坐标槽]         放置方块
 """
 
 from __future__ import annotations
@@ -26,6 +48,12 @@ _AXES = ("x", "y", "z")
 
 
 class Parser:
+    """递归下降语法分析器：把 token 流变成 AST。
+
+    内部只维护一个游标 self.i，指向当前待处理的 token；
+    所有"看一个但不消费"的操作走 peek，"消费一个"走 advance。
+    """
+
     def __init__(self, tokens: List[Token], source: Optional[Source] = None) -> None:
         self.tokens = tokens
         self.i = 0
@@ -33,47 +61,65 @@ class Parser:
 
     # ------------------------------------------------------------------ 工具
     def peek(self, offset: int = 0) -> Token:
+        """看一眼当前 token（可以往后看 offset 个），不消费。"""
+
         idx = self.i + offset
         if idx >= len(self.tokens):
             return self.tokens[-1]
         return self.tokens[idx]
 
     def advance(self) -> Token:
+        """消费当前 token 并返回它；遇到文件结尾时不再前进。"""
+
         tok = self.peek()
         if tok.type != TOK_EOF:
             self.i += 1
         return tok
 
     def check_punct(self, value: str) -> bool:
+        """当前 token 是不是指定的标点？"""
+
         tok = self.peek()
         return tok.type == TOK_PUNCT and tok.value == value
 
     def check_ident(self, value: str) -> bool:
+        """当前 token 是不是指定的标识符（关键字也算标识符）？"""
+
         tok = self.peek()
         return tok.type == TOK_IDENT and tok.value == value
 
     def accept_punct(self, value: str) -> Optional[Token]:
+        """如果是指定的标点就吃掉它并返回，否则返回 None（不报错）。"""
+
         if self.check_punct(value):
             return self.advance()
         return None
 
     def accept_ident(self, value: str) -> Optional[Token]:
+        """如果是指定的标识符就吃掉它并返回，否则返回 None（不报错）。"""
+
         if self.check_ident(value):
             return self.advance()
         return None
 
     def expect_punct(self, value: str) -> Token:
+        """要求当前是指定的标点，否则报错。"""
+
         if not self.check_punct(value):
             self.error(f"期望 '{value}'，实际得到 {self._describe(self.peek())}")
         return self.advance()
 
     def expect_ident(self, what: str = "标识符") -> Token:
+        """要求当前是标识符，否则报错；what 是给用户看的大白话提示。"""
+
         tok = self.peek()
         if tok.type != TOK_IDENT:
             self.error(f"期望{what}，实际得到 {self._describe(tok)}")
         return self.advance()
 
     def expect_keyword(self, word: str) -> Token:
+        """要求当前是指定的关键字，否则报错。"""
+
         tok = self.peek()
         if tok.type != TOK_IDENT or tok.value != word:
             self.error(f"期望关键字 '{word}'，实际得到 {self._describe(tok)}")
@@ -81,6 +127,8 @@ class Parser:
 
     @staticmethod
     def _describe(tok: Token) -> str:
+        """把 token 描述成人能看懂的样子，用在报错信息里。"""
+
         if tok.type == TOK_EOF:
             return "文件结尾"
         if tok.type == TOK_STRING:
@@ -95,6 +143,8 @@ class Parser:
 
     # ------------------------------------------------------------------ 入口
     def parse_program(self) -> List:
+        """解析整个文件，返回顶层语句列表。"""
+
         stmts = []
         while self.peek().type != TOK_EOF:
             stmt = self.parse_statement()
@@ -118,6 +168,17 @@ class Parser:
 
     # ------------------------------------------------------------------ 语句
     def parse_statement(self):
+        """解析一条语句。
+
+        分派顺序：
+            1. 空语句（单独一个分号）直接跳过；
+            2. 关键字语句：查表找对应的 _parse_xxx；
+            3. rbl / block 两个特殊放置指令；
+            4. 其余元件指令（rw、rrep、rco……）；
+            5. 扩展语法：变量赋值 name = expr;
+            6. 都不是的话，按表达式语句处理。
+        """
+
         tok = self.peek()
 
         if tok.type == TOK_PUNCT and tok.value == ";":
@@ -169,6 +230,8 @@ class Parser:
 
     # ------------------------------------------------------------- 全局配置
     def _parse_dpos(self):
+        """解析 dpos 语句：dpos 名称[x,y,z]"""
+
         tok = self.expect_keyword("dpos")
         name_tok = self.expect_ident("dpos 变量名（例如 dpos base[100,64,200]）")
         coord = self.parse_coord()
@@ -196,6 +259,8 @@ class Parser:
                        line=tok.line, col=tok.col)
 
     def _parse_drp(self):
+        """解析 drp 语句：drp 名称{键=值} 或 drp 名称{另一个drp变量名}"""
+
         tok = self.expect_keyword("drp")
         name_tok = self.expect_ident("drp 变量名（例如 drp high{rsig=15}）")
         states, ref = self.parse_state_slot()
@@ -205,6 +270,8 @@ class Parser:
 
     # --------------------------------------------------------------- 变量
     def _parse_let(self):
+        """解析 let 语句：let 变量名 = 表达式"""
+
         tok = self.expect_keyword("let")
         name_tok = self.expect_ident("变量名")
         self.expect_punct("=")
@@ -214,6 +281,8 @@ class Parser:
 
     # ------------------------------------------------------------- 控制流
     def _parse_if(self):
+        """解析 if 语句：if(条件):{...} else if(条件):{...} else:{...}"""
+
         tok = self.expect_keyword("if")
         self.expect_punct("(")
         cond = self.parse_expr()
@@ -223,6 +292,7 @@ class Parser:
         else_body = None
         if self.accept_ident("else"):
             if self.check_ident("if"):
+                # else if 复用 if 的解析，整条链当作 else 分支里的一个嵌套 if
                 else_body = [self._parse_if()]
             else:
                 self.accept_punct(":")   # 冒号可省略
@@ -231,6 +301,8 @@ class Parser:
                       line=tok.line, col=tok.col)
 
     def _parse_for(self):
+        """解析 for 语句：for 变量 = (起始 to 结束):{...}（闭区间）"""
+
         tok = self.expect_keyword("for")
         var_tok = self.expect_ident("循环变量名")
         self.expect_punct("=")
@@ -245,6 +317,8 @@ class Parser:
                        line=tok.line, col=tok.col)
 
     def _parse_while(self):
+        """解析 while 语句：while(条件):{...}"""
+
         tok = self.expect_keyword("while")
         self.expect_punct("(")
         cond = self.parse_expr()
@@ -254,26 +328,35 @@ class Parser:
         return WhileStmt(cond=cond, body=body, line=tok.line, col=tok.col)
 
     def _parse_return(self):
+        """解析 return 语句：return 表达式（表达式可省略）。"""
+
         tok = self.expect_keyword("return")
         value = None
         nxt = self.peek()
+        # 后面紧跟 } 或 ; 或文件结尾，说明是无值返回
         if not (nxt.type == TOK_PUNCT and nxt.value in ("}", ";")) and nxt.type != TOK_EOF:
             value = self.parse_expr()
         self.accept_punct(";")
         return ReturnStmt(value=value, line=tok.line, col=tok.col)
 
     def _parse_break(self):
+        """解析 break 语句：跳出当前循环。"""
+
         tok = self.expect_keyword("break")
         self.accept_punct(";")
         return BreakStmt(line=tok.line, col=tok.col)
 
     def _parse_continue(self):
+        """解析 continue 语句：跳过本轮循环。"""
+
         tok = self.expect_keyword("continue")
         self.accept_punct(";")
         return ContinueStmt(line=tok.line, col=tok.col)
 
     # --------------------------------------------------------- 函数 / 结构
     def _parse_def(self):
+        """解析 def 语句：def 名称(参数):{...}"""
+
         tok = self.expect_keyword("def")
         name_tok = self.expect_ident("函数名")
         params = self.parse_param_list()
@@ -283,6 +366,11 @@ class Parser:
                        line=tok.line, col=tok.col)
 
     def _parse_strudef(self):
+        """解析 strudef 语句：strudef 名称(参数){默认状态}:{...}
+
+        和 def 不同，这里的冒号是必须写的。
+        """
+
         tok = self.expect_keyword("strudef")
         name_tok = self.expect_ident("结构名")
         params = self.parse_param_list()
@@ -293,6 +381,11 @@ class Parser:
                          defaults_ref=defaults_ref, body=body, line=tok.line, col=tok.col)
 
     def _parse_stru_call(self):
+        """解析 stru 语句：stru 名称(参数){覆盖状态}[坐标]
+
+        名称里可以带命名空间：stru kit.rep_unit(...)。
+        """
+
         tok = self.expect_keyword("stru")
         name_tok = self.expect_ident("结构名")
         name = name_tok.value
@@ -310,6 +403,8 @@ class Parser:
                           override_ref=override_ref, coord=coord, line=tok.line, col=tok.col)
 
     def parse_param_list(self) -> List[str]:
+        """解析形参列表：(a, b, c)，返回参数名列表。"""
+
         self.expect_punct("(")
         params: List[str] = []
         if not self.check_punct(")"):
@@ -346,11 +441,19 @@ class Parser:
 
     # ------------------------------------------------------------- 放置指令
     def _parse_element_place(self):
+        """解析元件放置指令：rw / rrep / rco……{状态槽}[坐标槽]"""
+
         tok = self.advance()  # 元件指令名
         target = Target(kind="element", name=tok.value)
         return self._finish_place(target, tok)
 
     def _parse_special_place(self):
+        """解析 rbl / block 两个特殊放置指令。
+
+        rbl 后面只跟一个缩写标识符；block 后面跟方块 ID，
+        ID 可以写成 namespace:path 两段（见 _parse_block_id）。
+        """
+
         tok = self.advance()  # rbl / block
         if tok.value == "rbl":
             name_tok = self.expect_ident("方块缩写")
@@ -360,6 +463,8 @@ class Parser:
         return self._finish_place(target, tok)
 
     def _parse_block_id(self) -> str:
+        """解析方块 ID，返回带命名空间的形式（缺省 namespace 由解释器补）。"""
+
         first = self.expect_ident("方块 ID")
         if self.check_punct(":"):
             self.advance()
@@ -368,6 +473,8 @@ class Parser:
         return first.value
 
     def _finish_place(self, target: Target, tok: Token) -> PlaceStmt:
+        """放置指令的公共尾巴：状态槽 + 坐标槽 + 可选分号。"""
+
         states, ref = self.parse_state_slot()
         coord = None
         if self.check_punct("["):
@@ -411,6 +518,12 @@ class Parser:
         return states, None
 
     def parse_state_pairs(self) -> dict:
+        """解析状态块里的键值对：{键=值, 键2=值2}
+
+        每个值包一层 StateValue，把键的行列位置记下来，
+        这样状态键写错时能精确指出是哪个键的问题。
+        """
+
         states: dict = {}
         while not self.check_punct("}"):
             if self.peek().type == TOK_EOF:
@@ -509,10 +622,18 @@ class Parser:
         return offsets
 
     # --------------------------------------------------------------- 表达式
+    # 优先级从低到高，每一层负责一种运算符，靠互相调用形成优先级：
+    #     parse_expr → parse_or → parse_and → parse_cmp
+    #               → parse_add → parse_mul → parse_unary → parse_primary
+    # 每一层先递归拿到"比自己紧一档"的左操作数，再把同级的运算符串成左结合的链。
     def parse_expr(self) -> Expr:
+        """解析一个表达式：表达式的入口。"""
+
         return self.parse_or()
 
     def parse_or(self) -> Expr:
+        """解析逻辑或：||（最低优先级，左结合）。"""
+
         left = self.parse_and()
         while self.check_punct("||"):
             tok = self.advance()
@@ -521,6 +642,8 @@ class Parser:
         return left
 
     def parse_and(self) -> Expr:
+        """解析逻辑与：&&（左结合）。"""
+
         left = self.parse_cmp()
         while self.check_punct("&&"):
             tok = self.advance()
@@ -529,6 +652,8 @@ class Parser:
         return left
 
     def parse_cmp(self) -> Expr:
+        """解析比较：== != >= <= > <（不可连写，比较运算不结合）。"""
+
         left = self.parse_add()
         for op in ("==", "!=", ">=", "<=", ">", "<"):
             if self.check_punct(op):
@@ -539,6 +664,8 @@ class Parser:
         return left
 
     def parse_add(self) -> Expr:
+        """解析加减：+ -（左结合）。"""
+
         left = self.parse_mul()
         while self.check_punct("+") or self.check_punct("-"):
             tok = self.advance()
@@ -547,6 +674,8 @@ class Parser:
         return left
 
     def parse_mul(self) -> Expr:
+        """解析乘除取余：* / %（左结合）。"""
+
         left = self.parse_unary()
         while self.check_punct("*") or self.check_punct("/") or self.check_punct("%"):
             tok = self.advance()
@@ -555,6 +684,8 @@ class Parser:
         return left
 
     def parse_unary(self) -> Expr:
+        """解析一元运算：-x、!x（可叠加，如 --x）。"""
+
         if self.check_punct("-"):
             tok = self.advance()
             operand = self.parse_unary()
@@ -566,6 +697,12 @@ class Parser:
         return self.parse_primary()
 
     def parse_primary(self) -> Expr:
+        """解析最基本的一级表达式：数字、字符串、标识符、括号。
+
+        标识符后面可以跟点号取属性、再跟括号做调用，
+        两种顺序可以叠加：kit.decay(12)
+        """
+
         tok = self.peek()
         if tok.type == TOK_NUMBER:
             self.advance()
@@ -584,8 +721,10 @@ class Parser:
             if self.check_punct("("):
                 args, kwargs = self.parse_call_args()
                 if isinstance(expr, Var):
+                    # 纯变量调用（decay(3)）：记名字，解释器里好查
                     return Call(name=expr.name, args=args, kwargs=kwargs,
                                 line=tok.line, col=tok.col)
+                # 带命名空间的调用（kit.decay(3)）：记表达式
                 return Call(func=expr, args=args, kwargs=kwargs,
                             line=tok.line, col=tok.col)
             return expr
