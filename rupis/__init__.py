@@ -37,9 +37,12 @@ __all__ = [
     "compile_source",
 ]
 
-# 当前还是测试期版本号，正式发布后再改
+# 当前还是测试期版本号
 __version__ = "0.2"
 
+def output_version():
+    """返回版本号"""
+    return __version__
 
 def compile_source(text: str, filename: str = "<string>") -> Tuple[List[Stmt], Source]:
     """词法 + 语法分析，返回 (AST, 源码)。

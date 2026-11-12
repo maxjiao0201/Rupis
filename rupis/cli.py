@@ -12,6 +12,8 @@ import argparse
 import sys
 import os
 from pathlib import Path
+from rupis import __version__
+
 
 
 from . import RupisError, compile_source, run_source
@@ -64,8 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--lang",
         help=t("指定语言（lang 目录下的文件名，如 en）；默认用上次在 IDE 里选的"),
     )
-    # 注意：这里写死的版本号和 rupis.__version__ 目前并不一致
-    parser.add_argument("--version", action="version", version="Rupis 1.0.0")
+
+    parser.add_argument("--version", action="version", version=f"Rupis {__version__}")
     return parser
 
 def read_script(path_text: str) -> str:
