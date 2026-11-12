@@ -4,7 +4,6 @@
 把 Rupis 的安装目录写进当前用户的 PATH，用户在任意目录下都能直接敲 `rupis`；
 再把 .PY 加进 PATHEXT，Windows 才会把 .py 认成可以执行的脚本类型。
 
-只改 HKCU\\Environment，不碰系统级变量，所以不需要管理员权限。
 注意：本模块依赖 winreg，只能在 Windows 上使用。
 """
 

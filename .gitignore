@@ -12,9 +12,6 @@ env.bak/
 venv.bak/
 .pytest_cache/
 
-# 运行时标记文件（记录 .rpi 文件关联是否已注册）
-rupis/file_assoc.installed
-
 # PyInstaller 打包产物
 build/
 dist/

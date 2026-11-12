@@ -38,7 +38,7 @@ __all__ = [
 ]
 
 # 当前还是测试期版本号，正式发布后再改
-__version__ = "0.1"
+__version__ = "0.2"
 
 
 def compile_source(text: str, filename: str = "<string>") -> Tuple[List[Stmt], Source]:
