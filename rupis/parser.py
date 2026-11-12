@@ -40,6 +40,7 @@ from .ast_nodes import (
 )
 from .blocks import ELEMENTS
 from .errors import ParserError, Source
+from .i18n import t
 from .lexer import TOK_EOF, TOK_IDENT, TOK_NUMBER, TOK_PUNCT, TOK_STRING, Lexer, Token
 
 # 语句开头会被当成“放置指令”的关键字
@@ -106,15 +107,18 @@ class Parser:
         """要求当前是指定的标点，否则报错。"""
 
         if not self.check_punct(value):
-            self.error(f"期望 '{value}'，实际得到 {self._describe(self.peek())}")
+            self.error(t("期望 '{expect}'，实际得到 {got}",
+                         expect=value, got=self._describe(self.peek())))
         return self.advance()
 
-    def expect_ident(self, what: str = "标识符") -> Token:
+    def expect_ident(self, what: Optional[str] = None) -> Token:
         """要求当前是标识符，否则报错；what 是给用户看的大白话提示。"""
 
         tok = self.peek()
         if tok.type != TOK_IDENT:
-            self.error(f"期望{what}，实际得到 {self._describe(tok)}")
+            self.error(t("期望{what}，实际得到 {got}",
+                         what=what if what is not None else t("标识符"),
+                         got=self._describe(tok)))
         return self.advance()
 
     def expect_keyword(self, word: str) -> Token:
@@ -122,7 +126,8 @@ class Parser:
 
         tok = self.peek()
         if tok.type != TOK_IDENT or tok.value != word:
-            self.error(f"期望关键字 '{word}'，实际得到 {self._describe(tok)}")
+            self.error(t("期望关键字 '{word}'，实际得到 {got}",
+                         word=word, got=self._describe(tok)))
         return self.advance()
 
     @staticmethod
@@ -130,9 +135,9 @@ class Parser:
         """把 token 描述成人能看懂的样子，用在报错信息里。"""
 
         if tok.type == TOK_EOF:
-            return "文件结尾"
+            return t("文件结尾")
         if tok.type == TOK_STRING:
-            return f"字符串 {tok.value!r}"
+            return t("字符串 {value!r}", value=tok.value)
         return f"'{tok.value}'"
 
     def error(self, message: str, tok: Optional[Token] = None):
@@ -159,7 +164,7 @@ class Parser:
         stmts = []
         while not self.check_punct("}"):
             if self.peek().type == TOK_EOF:
-                self.error("代码块没有闭合（缺少 }）")
+                self.error(t("代码块没有闭合（缺少 }）"))
             stmt = self.parse_statement()
             if stmt is not None:
                 stmts.append(stmt)
@@ -214,7 +219,7 @@ class Parser:
             # 未知标识符：如果后面紧跟 { 或 [，那它一定是想写放置指令
             nxt = self.peek(1)
             if nxt.type == TOK_PUNCT and nxt.value in ("{", "["):
-                self.error(f"未知的元件指令 '{word}'", tok)
+                self.error(t("未知的元件指令 '{word}'", word=word), tok)
 
             # 扩展语法：变量赋值 name = expr;
             if nxt.type == TOK_PUNCT and nxt.value == "=":
@@ -233,7 +238,7 @@ class Parser:
         """解析 dpos 语句：dpos 名称[x,y,z]"""
 
         tok = self.expect_keyword("dpos")
-        name_tok = self.expect_ident("dpos 变量名（例如 dpos base[100,64,200]）")
+        name_tok = self.expect_ident(t("dpos 变量名（例如 dpos base[100,64,200]）"))
         coord = self.parse_coord()
         self.accept_punct(";")
         return DposStmt(name=name_tok.value, coord=coord, line=tok.line, col=tok.col)
@@ -242,16 +247,16 @@ class Parser:
         """解析 lib 语句：lib 脚本名 [as 别名]"""
 
         tok = self.expect_keyword("lib")
-        name_tok = self.expect_ident("脚本名（例如 lib util）")
+        name_tok = self.expect_ident(t("脚本名（例如 lib util）"))
         script = name_tok.value
         # 支持 lib sub/util 这样的相对路径
         while self.check_punct("/"):
             self.advance()
-            part = self.expect_ident("脚本名的一部分")
+            part = self.expect_ident(t("脚本名的一部分"))
             script += "/" + part.value
         alias = ""
         if self.accept_ident("as"):
-            alias = self.expect_ident("别名（例如 lib util as u）").value
+            alias = self.expect_ident(t("别名（例如 lib util as u）")).value
         self.accept_punct(";")
         # 命名空间的名字：写了 as 就用别名，否则用脚本名最后一段
         name = alias or script.rsplit("/", 1)[-1]
@@ -262,7 +267,7 @@ class Parser:
         """解析 drp 语句：drp 名称{键=值} 或 drp 名称{另一个drp变量名}"""
 
         tok = self.expect_keyword("drp")
-        name_tok = self.expect_ident("drp 变量名（例如 drp high{rsig=15}）")
+        name_tok = self.expect_ident(t("drp 变量名（例如 drp high{rsig=15}）"))
         states, ref = self.parse_state_slot()
         self.accept_punct(";")
         return DrpStmt(name=name_tok.value, states=states, states_ref=ref,
@@ -273,7 +278,7 @@ class Parser:
         """解析 let 语句：let 变量名 = 表达式"""
 
         tok = self.expect_keyword("let")
-        name_tok = self.expect_ident("变量名")
+        name_tok = self.expect_ident(t("变量名"))
         self.expect_punct("=")
         value = self.parse_expr()
         self.accept_punct(";")
@@ -304,7 +309,7 @@ class Parser:
         """解析 for 语句：for 变量 = (起始 to 结束):{...}（闭区间）"""
 
         tok = self.expect_keyword("for")
-        var_tok = self.expect_ident("循环变量名")
+        var_tok = self.expect_ident(t("循环变量名"))
         self.expect_punct("=")
         self.expect_punct("(")
         start = self.parse_expr()
@@ -358,7 +363,7 @@ class Parser:
         """解析 def 语句：def 名称(参数):{...}"""
 
         tok = self.expect_keyword("def")
-        name_tok = self.expect_ident("函数名")
+        name_tok = self.expect_ident(t("函数名"))
         params = self.parse_param_list()
         self.accept_punct(":")   # 规范写作 def f(...):{...}，冒号可省略
         body = self.parse_block()
@@ -372,7 +377,7 @@ class Parser:
         """
 
         tok = self.expect_keyword("strudef")
-        name_tok = self.expect_ident("结构名")
+        name_tok = self.expect_ident(t("结构名"))
         params = self.parse_param_list()
         defaults, defaults_ref = self.parse_state_slot()
         self.expect_punct(":")
@@ -387,12 +392,12 @@ class Parser:
         """
 
         tok = self.expect_keyword("stru")
-        name_tok = self.expect_ident("结构名")
+        name_tok = self.expect_ident(t("结构名"))
         name = name_tok.value
         # 支持 stru 模块.结构名(...) —— 用 lib 导入的脚本里的结构
         while self.check_punct("."):
             self.advance()
-            name += "." + self.expect_ident("结构名的一部分").value
+            name += "." + self.expect_ident(t("结构名的一部分")).value
         args, kwargs = self.parse_call_args()
         override, override_ref = self.parse_state_slot()
         coord = None
@@ -409,7 +414,7 @@ class Parser:
         params: List[str] = []
         if not self.check_punct(")"):
             while True:
-                params.append(self.expect_ident("参数名").value)
+                params.append(self.expect_ident(t("参数名")).value)
                 if not self.accept_punct(","):
                     break
         self.expect_punct(")")
@@ -456,7 +461,7 @@ class Parser:
 
         tok = self.advance()  # rbl / block
         if tok.value == "rbl":
-            name_tok = self.expect_ident("方块缩写")
+            name_tok = self.expect_ident(t("方块缩写"))
             target = Target(kind="rbl", name=name_tok.value)
         else:  # block
             target = Target(kind="block", name=self._parse_block_id())
@@ -465,10 +470,10 @@ class Parser:
     def _parse_block_id(self) -> str:
         """解析方块 ID，返回带命名空间的形式（缺省 namespace 由解释器补）。"""
 
-        first = self.expect_ident("方块 ID")
+        first = self.expect_ident(t("方块 ID"))
         if self.check_punct(":"):
             self.advance()
-            second = self.expect_ident("方块 ID")
+            second = self.expect_ident(t("方块 ID"))
             return f"{first.value}:{second.value}"
         return first.value
 
@@ -510,7 +515,7 @@ class Parser:
             self.advance()
             name = tok.value
             if self.check_punct(","):
-                self.error("状态槽里不能把 drp 变量名和键值对混在一起", tok)
+                self.error(t("状态槽里不能把 drp 变量名和键值对混在一起"), tok)
             self.expect_punct("}")
             return None, name
 
@@ -527,8 +532,8 @@ class Parser:
         states: dict = {}
         while not self.check_punct("}"):
             if self.peek().type == TOK_EOF:
-                self.error("状态块没有闭合（缺少 }）")
-            key_tok = self.expect_ident("状态键名")
+                self.error(t("状态块没有闭合（缺少 }）"))
+            key_tok = self.expect_ident(t("状态键名"))
             self.expect_punct("=")
             # 用完整的表达式，状态值里也能写 math.floor(3.7) 这种
             value = self.parse_expr()
@@ -589,10 +594,10 @@ class Parser:
 
         offsets: List[Tuple[str, Expr]] = []
         while True:
-            tok = self.expect_ident("坐标偏移（形如 x1、xi）")
+            tok = self.expect_ident(t("坐标偏移（形如 x1、xi）"))
             axis = tok.value[0].lower()
             if axis not in _AXES:
-                self.error(f"坐标偏移轴只能是 x / y / z，收到 '{tok.value}'", tok)
+                self.error(t("坐标偏移轴只能是 x / y / z，收到 '{value}'", value=tok.value), tok)
             rest = tok.value[1:]
 
             if rest.isdigit():
@@ -607,7 +612,7 @@ class Parser:
                 else:
                     value = self.parse_unary()
             else:
-                self.error(f"无法解析的坐标偏移 '{tok.value}'", tok)
+                self.error(t("无法解析的坐标偏移 '{value}'", value=tok.value), tok)
 
             # 允许继续写算术运算，例如 x20+3
             while self.check_punct("+") or self.check_punct("-") or self.check_punct("*") or self.check_punct("/"):
@@ -716,7 +721,7 @@ class Parser:
             # 属性访问：math.sqrt 这种（lib 导入的模块靠它用）
             while self.check_punct("."):
                 dot = self.advance()
-                attr = self.expect_ident("属性名")
+                attr = self.expect_ident(t("属性名"))
                 expr = Attr(value=expr, name=attr.value, line=dot.line, col=dot.col)
             if self.check_punct("("):
                 args, kwargs = self.parse_call_args()
@@ -733,7 +738,7 @@ class Parser:
             expr = self.parse_expr()
             self.expect_punct(")")
             return expr
-        self.error(f"无法解析的表达式 {self._describe(tok)}", tok)
+        self.error(t("无法解析的表达式 {expr}", expr=self._describe(tok)), tok)
 
 
 def parse(text: str, filename: str = "<string>") -> List:

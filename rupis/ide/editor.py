@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import compile_source
 from ..ast_nodes import FuncDef, StructDef
+from ..i18n import t
 from .highlighter import RupisHighlighter, completion_words
 from .qtcompat import QtCore, QtGui, QtWidgets
 from .syntax import (ELEMENTS, ELEMENT_STATES, describe, describe_state_key,
@@ -106,7 +107,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         self._font_size = 11
         self.setFont(QtGui.QFont("Consolas", self._font_size))
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(" "))
-        self.setPlaceholderText("在这里写 Rupis 脚本…（F5 运行，F9 检查语法）")
+        self.setPlaceholderText(t("在这里写 Rupis 脚本…（F5 运行，F9 检查语法）"))
 
         # 行号
         self.blockCountChanged.connect(self._update_ln_width)
@@ -680,7 +681,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
             return
         word = str(index.data())
         if word:
-            self.hintChanged.emit(describe(word) or f"补全：{word}")
+            self.hintChanged.emit(describe(word) or t("补全：{word}", word=word))
 
     # ================================================================ 查找替换
     def find_matches(self, needle: str, *, case_sensitive: bool = False,
@@ -695,7 +696,7 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
             try:
                 pattern = re.compile(needle, flags)
             except re.error as exc:
-                raise ValueError(f"正则表达式无效：{exc}") from exc
+                raise ValueError(t("正则表达式无效：{exc}", exc=exc)) from exc
             out = []
             for m in pattern.finditer(text):
                 if m.end() == m.start():   # 跳过空匹配，避免死循环
@@ -936,10 +937,10 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
             return False
         line = self.find_definition(name)
         if not line:
-            self.hintChanged.emit(f"找不到 {name} 的定义")
+            self.hintChanged.emit(t("找不到 {name} 的定义", name=name))
             return False
         self.goto_line(line)
-        self.hintChanged.emit(f"跳转到 {name} 的定义（第 {line} 行）")
+        self.hintChanged.emit(t("跳转到 {name} 的定义（第 {line} 行）", name=name, line=line))
         return True
 
     # ================================================================ 提示
@@ -963,8 +964,9 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
         if element:
             keys = ELEMENT_STATES.get(element, [])
             if keys:
-                return f"{element} 可用状态键：{'、'.join(keys)}"
-            return f"{element} 不接受自定义状态键"
+                return t("{element} 可用状态键：{keys}",
+                        element=element, keys="、".join(keys))
+            return t("{element} 不接受自定义状态键", element=element)
         return ""
 
     def _element_in_state_slot(self, pos: int) -> Optional[str]:
@@ -1020,11 +1022,11 @@ class RupisEditor(QtWidgets.QPlainTextEdit):
 
         menu = self.createStandardContextMenu()
         menu.addSeparator()
-        act_def = menu.addAction("跳转到定义  (F12)")
+        act_def = menu.addAction(t("跳转到定义  (F12)"))
         act_def.triggered.connect(self.jump_to_definition)
-        act_comment = menu.addAction("注释 / 取消注释  (Ctrl+/)")
+        act_comment = menu.addAction(t("注释 / 取消注释  (Ctrl+/)"))
         act_comment.triggered.connect(self._toggle_comment)
-        act_find = menu.addAction("查找…  (Ctrl+F)")
+        act_find = menu.addAction(t("查找…  (Ctrl+F)"))
         act_find.triggered.connect(self.findRequested.emit)
         # PyQt6 把 exec 改名成 exec_，这里兼容一下
         runner = getattr(menu, "exec", None) or getattr(menu, "exec_")

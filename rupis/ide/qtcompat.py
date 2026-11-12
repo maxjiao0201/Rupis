@@ -16,6 +16,8 @@ PyQt5 是旧式无作用域枚举，这里补一层别名，保证同一份代�
 
 from __future__ import annotations
 
+from ..i18n import t
+
 BINDING = ""
 
 try:
@@ -35,9 +37,9 @@ except ImportError:
             BINDING = "PyQt5"
         except ImportError:
             raise ImportError(
-                "Rupis IDE 需要 PySide6 / PyQt6 / PyQt5 之一。\n"
-                "  pip install PySide6      # 推荐\n"
-                "  pip install PyQt6"
+                t("Rupis IDE 需要 PySide6 / PyQt6 / PyQt5 之一。\n"
+                  "  pip install PySide6      # 推荐\n"
+                  "  pip install PyQt6")
             )
 
 

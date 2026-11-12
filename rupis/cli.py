@@ -16,6 +16,8 @@ from pathlib import Path
 
 from . import RupisError, compile_source, run_source
 from . import exporters
+from . import i18n
+from .i18n import t
 
 EXIT_OK = 0        # 一切正常
 EXIT_ERROR = 1     # 脚本本身出错（语法错误、运行时报错等）
@@ -30,33 +32,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="rupis",
-        description="Rupis 红石脚本解释器（.rpi）",
+        description=t("Rupis 红石脚本解释器（.rpi）"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例：\n"
-               "  python main.py demo.rpi\n"
-               "  python main.py demo.rpi --format json -o demo.json\n"
-               "  python main.py demo.rpi --format structure -o demo.mcstructure\n"
-               "  python main.py --ide            # 打开图形界面 IDE\n",
+        epilog=t("示例：\n"
+                 "  python main.py demo.rpi\n"
+                 "  python main.py demo.rpi --format json -o demo.json\n"
+                 "  python main.py demo.rpi --format structure -o demo.mcstructure\n"
+                 "  python main.py --ide            # 打开图形界面 IDE\n"),
     )
-    parser.add_argument("script", nargs="?", help="要执行的 .rpi 脚本文件")
+    parser.add_argument("script", nargs="?", help=t("要执行的 .rpi 脚本文件"))
     parser.add_argument(
         "--ide", action="store_true",
-        help="启动 Rupis 图形界面 IDE（可跟一个脚本文件）",
+        help=t("启动 Rupis 图形界面 IDE（可跟一个脚本文件）"),
     )
     parser.add_argument(
         "-f", "--format",
         choices=["commands", "json", "structure", "summary"],
         default="commands",
-        help="输出格式：commands（默认）/ json / structure / summary",
+        help=t("输出格式：commands（默认）/ json / structure / summary"),
     )
-    parser.add_argument("-o", "--output", help="输出文件路径（不指定则打印到标准输出）")
-    parser.add_argument("--check", action="store_true", help="只做语法检查，不执行脚本")
-    parser.add_argument("-v", "--verbose", action="store_true", help="执行时把每条放置指令打印到标准错误")
+    parser.add_argument("-o", "--output", help=t("输出文件路径（不指定则打印到标准输出）"))
+    parser.add_argument("--check", action="store_true", help=t("只做语法检查，不执行脚本"))
+    parser.add_argument("-v", "--verbose", action="store_true", help=t("执行时把每条放置指令打印到标准错误"))
     parser.add_argument(
         "--data-version",
         type=int,
         default=3955,
-        help=".mcstructure 的 DataVersion（默认 3955，对应 1.21.4）",
+        help=t(".mcstructure 的 DataVersion（默认 3955，对应 1.21.4）"),
+    )
+    parser.add_argument(
+        "--lang",
+        help=t("指定语言（lang 目录下的文件名，如 en）；默认用上次在 IDE 里选的"),
     )
     # 注意：这里写死的版本号和 rupis.__version__ 目前并不一致
     parser.add_argument("--version", action="version", version="Rupis 1.0.0")
@@ -70,12 +76,29 @@ def read_script(path_text: str) -> str:
 
     path = Path(path_text)
     if not path.exists():
-        raise RupisError(f"找不到脚本文件：{path}")
+        raise RupisError(t("找不到脚本文件：{path}", path=path))
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         # 兼容 GBK 保存的脚本
         return path.read_text(encoding="gbk", errors="replace")
+
+
+def _apply_lang_option(argv) -> None:
+    """先扫一遍 --lang，让解析器自己的帮助文字也用上选中的语言。
+
+    不带 --lang 就保持 i18n 模块加载时定下的语言（上次在 IDE 里选的那个）。
+    """
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    for index, item in enumerate(argv):
+        if item == "--lang" and index + 1 < len(argv):
+            i18n.set_language(argv[index + 1], persist=False)
+            return
+        if item.startswith("--lang="):
+            i18n.set_language(item.split("=", 1)[1], persist=False)
+            return
+
 
 def main(argv=None) -> int:
     """命令行主流程，返回进程退出码。
@@ -83,6 +106,7 @@ def main(argv=None) -> int:
     argv：可选的参数列表；不传就用 sys.argv[1:]。
     """
 
+    _apply_lang_option(argv)
     args = build_parser().parse_args(argv)
 
     # 在这里判断flag，不会在导入阶段炸
@@ -104,7 +128,7 @@ def main(argv=None) -> int:
                 path.add_folder_to_user_environment()
         except Exception as exc:
             # 注册失败不影响使用，只是双击不会自动用 Rupis 打开
-            print(f"（文件关联注册失败，不影响使用：{exc}）")
+            print(t("（文件关联注册失败，不影响使用：{exc}）", exc=exc))
         try:
             _FLAG_DIR.mkdir(parents=True, exist_ok=True)
             FLAG_PATH.write_text("1", encoding="utf-8")
@@ -123,7 +147,7 @@ def main(argv=None) -> int:
         try:
             from .ide import main as ide_main
         except ImportError as exc:
-            print(f"错误：{exc}", file=sys.stderr)
+            print(t("错误：{exc}", exc=exc), file=sys.stderr)
             return EXIT_USAGE
         return ide_main([args.script] if args.script else [])
 
@@ -132,7 +156,7 @@ def main(argv=None) -> int:
         try:
             from .ide import main as ide_main
         except ImportError as exc:
-            print(f"错误：{exc}", file=sys.stderr)
+            print(t("错误：{exc}", exc=exc), file=sys.stderr)
             return EXIT_USAGE
         return ide_main([])
 
@@ -147,7 +171,7 @@ def main(argv=None) -> int:
         if args.check:
             # 只编译不执行，用来快速检查语法
             compile_source(text, args.script)
-            print(f"{args.script}: 语法检查通过。")
+            print(t("{script}: 语法检查通过。", script=args.script))
             return EXIT_OK
         interpreter = run_source(text, args.script, verbose=args.verbose)
     except RupisError as exc:
@@ -162,16 +186,18 @@ def main(argv=None) -> int:
         output = exporters.export_json(world)
     elif args.format == "structure":
         if not args.output:
-            print("错误：structure 格式必须用 -o 指定输出文件。", file=sys.stderr)
+            print(t("错误：structure 格式必须用 -o 指定输出文件。"), file=sys.stderr)
             return EXIT_USAGE
         count, size = exporters.export_structure(args.output, world, args.data_version)
-        output = f"已写出 {args.output}（{count} 个方块，尺寸 {size[0]}x{size[1]}x{size[2]}）"
+        output = t("已写出 {path}（{count} 个方块，尺寸 {x}x{y}x{z}）",
+                   path=args.output, count=count,
+                   x=size[0], y=size[1], z=size[2])
     else:
         output = exporters.export_commands(world)
 
     if args.output and args.format != "structure":
         Path(args.output).write_text(output + ("\n" if output else ""), encoding="utf-8")
-        print(f"已写出 {args.output}")
+        print(t("已写出 {path}", path=args.output))
     else:
         # 没给 -o 就直接打到屏幕上
         if output:

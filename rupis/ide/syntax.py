@@ -19,7 +19,9 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
+
+from ..i18n import t
 
 # 语句关键字
 KEYWORDS: Set[str] = {
@@ -57,6 +59,10 @@ ELEMENT_STATES: Dict[str, List[str]] = {
 }
 
 # 单词 → 一行说明（提示栏和补全下拉都用它）
+#
+# 说明分成两段，中间用「——」分开：前半句说这个词是什么，
+# 后半句补充细节。translate_hint() 负责把两段分别翻译，
+# 这样译文里即使没有「——」也不影响切分。
 HINTS: Dict[str, str] = {
     # 声明
     "dpos": "dpos 名称[x,y,z] —— 声明 / 覆盖一个坐标变量",
@@ -124,13 +130,40 @@ def classify(word: str) -> str:
     return ""
 
 
+# 说明里前后两段之间的分隔符
+HINT_SEPARATOR = "——"
+
+
+def split_hint(hint: str) -> Tuple[str, str]:
+    """把一条说明拆成 (前半句, 后半句)。
+
+    切分必须在翻译之前做：译文里未必还有「——」，
+    直接对译文切分会切错位置。
+    """
+
+    head, sep, tail = hint.partition(HINT_SEPARATOR)
+    if not sep:
+        return hint.strip(), ""
+    return head.strip(), tail.strip()
+
+
+def translate_hint(hint: str) -> str:
+    """翻译一条说明：两段分别翻译，再用分隔符拼回去。"""
+
+    head, tail = split_hint(hint)
+    text = t(head)
+    if tail:
+        text += " " + HINT_SEPARATOR + " " + t(tail)
+    return text
+
+
 def describe(word: str) -> str:
     """给补全下拉框 / 提示栏准备一行说明文字。"""
 
     if word in HINTS:
-        return HINTS[word]
+        return translate_hint(HINTS[word])
     if word in ELEMENT_STATES:
-        return "状态键：" + ", ".join(ELEMENT_STATES[word])
+        return t("状态键：{keys}", keys=", ".join(ELEMENT_STATES[word]))
     return describe_state_key(word)
 
 
@@ -140,16 +173,17 @@ def describe_state_key(key: str) -> str:
     owners = KEY_OWNERS.get(key)
     if not owners:
         return ""
-    return f"状态键 {key}：可用于 " + "、".join(sorted(owners))
+    return t("状态键 {key}：可用于 {owners}",
+             key=key, owners="、".join(sorted(owners)))
 
 
 def describe_symbol(name: str, kind: str) -> str:
     """说明用户自己定义的结构 / 函数。"""
 
     if kind == "structure":
-        return f"结构模板 {name} —— 用 stru 实例化"
+        return t("结构模板 {name} —— 用 stru 实例化", name=name)
     if kind == "function":
-        return f"函数 {name} —— 调用方式 {name}(参数…)"
+        return t("函数 {name} —— 调用方式 {name}(参数…)", name=name)
     return ""
 
 
@@ -159,5 +193,6 @@ def describe_element(element: str) -> str:
     hint = HINTS.get(element)
     if hint:
         # HINTS 里的写法是"前半句——后半句"，只要前半句
-        return hint.split("——")[0].strip()
+        head, _tail = split_hint(hint)
+        return t(head)
     return ""

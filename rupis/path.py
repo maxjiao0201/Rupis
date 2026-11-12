@@ -13,6 +13,8 @@ import sys
 import winreg
 import glob
 
+from .i18n import t
+
 # 自动获取固定值
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # rupis 包自己所在的目录
 PYTHON_EXE = sys.executable
@@ -45,13 +47,13 @@ def add_folder_to_user_environment():
         # PATH 是用分号分隔的，先拆开、去空白，再看看安装目录在不在里面
         path_parts = [p for p in cur_path.split(";") if p.strip()]
         if folder in path_parts:
-            print(f"[PATH] 已存在，跳过: {folder}")
+            print(t("[PATH] 已存在，跳过: {folder}", folder=folder))
         else:
             path_parts.append(folder)
             new_path = ";".join(path_parts)
             # 写回时沿用原来的注册表类型，别把 REG_EXPAND_SZ 降级成 REG_SZ
             winreg.SetValueEx(key, "Path", 0, path_type, new_path)
-            print(f"[PATH] 已追加: {folder}")
+            print(t("[PATH] 已追加: {folder}", folder=folder))
 
         # 处理 PATHEXT
         try:
@@ -64,13 +66,13 @@ def add_folder_to_user_environment():
         ext_list = cur_ext.split(";")
         has_py = any(e.upper() == ".PY" for e in ext_list)
         if has_py:
-            print("[PATHEXT] 已包含 .PY，跳过")
+            print(t("[PATHEXT] 已包含 .PY，跳过"))
         else:
             # 放在最前面，.py 的匹配优先级最高
             ext_list.insert(0, ".PY")
             new_ext = ";".join(ext_list)
             winreg.SetValueEx(key, "PATHEXT", 0, ext_type, new_ext)
-            print("[PATHEXT] 已前置 .PY")
+            print(t("[PATHEXT] 已前置 .PY"))
     finally:
         winreg.CloseKey(key)
 

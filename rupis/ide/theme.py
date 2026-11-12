@@ -18,8 +18,10 @@ from __future__ import annotations
 
 from typing import Dict
 
+from ..i18n import t
+
 DARK: Dict[str, str] = {
-    "name": "深色",
+    "name": t("深色"),
     "bg": "#1e1e1e",           # 代码区背景
     "panel": "#252526",       # 面板 / 侧栏
     "panel_fg": "#cccccc",
@@ -52,7 +54,7 @@ DARK: Dict[str, str] = {
 }
 
 LIGHT: Dict[str, str] = {
-    "name": "浅色",
+    "name": t("浅色"),
     "bg": "#ffffff",
     "panel": "#f3f3f3",
     "panel_fg": "#1f1f1f",

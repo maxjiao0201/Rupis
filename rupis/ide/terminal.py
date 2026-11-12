@@ -29,6 +29,7 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..i18n import t
 from .qtcompat import QtCore, QtGui, QtWidgets
 
 # 目录标记：命令跑完时让 cmd 打印一下当前目录
@@ -114,7 +115,7 @@ class _CommandThread(QtCore.QThread):
         try:
             line = build_command_line(self.command)
         except Exception as exc:  # pragma: no cover - 兜底
-            self.output.emit(f"无法执行：{exc}\n")
+            self.output.emit(t("无法执行：{exc}\n", exc=exc))
             self.commandDone.emit(-1)
             return
 
@@ -130,7 +131,7 @@ class _CommandThread(QtCore.QThread):
         try:
             self.proc = subprocess.Popen(line, **kwargs)
         except Exception as exc:
-            self.output.emit(f"无法执行：{exc}\n")
+            self.output.emit(t("无法执行：{exc}\n", exc=exc))
             self.commandDone.emit(-1)
             return
 
@@ -176,7 +177,7 @@ class _CommandThread(QtCore.QThread):
                 self._feed(tail)
         except Exception as exc:  # pragma: no cover - 兜底
             if not self._stop_output:
-                self.output.emit(f"\n读取输出出错：{exc}\n")
+                self.output.emit(t("\n读取输出出错：{exc}\n", exc=exc))
 
     def _feed(self, text: str) -> None:
         """把一段输出拆成行，目录标记那条单独拎出来。"""
@@ -283,13 +284,13 @@ class TerminalWidget(QtWidgets.QWidget):
         self.dir_label.setTextInteractionFlags(
             QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         bar.addWidget(self.dir_label, 1)
-        self.btn_script_dir = QtWidgets.QPushButton("转到脚本目录")
+        self.btn_script_dir = QtWidgets.QPushButton(t("转到脚本目录"))
         self.btn_script_dir.clicked.connect(self.goto_script_dir)
         bar.addWidget(self.btn_script_dir)
-        self.btn_pick_dir = QtWidgets.QPushButton("选择目录…")
+        self.btn_pick_dir = QtWidgets.QPushButton(t("选择目录…"))
         self.btn_pick_dir.clicked.connect(self.pick_dir)
         bar.addWidget(self.btn_pick_dir)
-        self.btn_clear = QtWidgets.QPushButton("清屏")
+        self.btn_clear = QtWidgets.QPushButton(t("清屏"))
         self.btn_clear.clicked.connect(self.clear)
         bar.addWidget(self.btn_clear)
         layout.addLayout(bar)
@@ -309,7 +310,8 @@ class TerminalWidget(QtWidgets.QWidget):
         self.prompt_label.setFont(QtGui.QFont("Consolas", 10))
         self.input = QtWidgets.QLineEdit()
         self.input.setFont(QtGui.QFont("Consolas", 10))
-        self.input.setPlaceholderText("在这里敲命令，回车执行（Ctrl+C 中断，Ctrl+L 清屏）")
+        self.input.setPlaceholderText(
+            t("在这里敲命令，回车执行（Ctrl+C 中断，Ctrl+L 清屏）"))
         self.input.returnPressed.connect(self.submit)
         self.input.installEventFilter(self)
         row.addWidget(self.prompt_label)
@@ -356,7 +358,7 @@ class TerminalWidget(QtWidgets.QWidget):
         """弹出目录选择框，换工作目录。"""
 
         folder = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "选择终端工作目录", str(self._cwd))
+            self, t("选择终端工作目录"), str(self._cwd))
         if folder:
             self.set_cwd(folder)
 
@@ -371,7 +373,7 @@ class TerminalWidget(QtWidgets.QWidget):
         """刷新提示符与目录标签。"""
 
         self.prompt_label.setText(self.prompt_text())
-        self.dir_label.setText(f"工作目录：{self._cwd}")
+        self.dir_label.setText(t("工作目录：{cwd}", cwd=self._cwd))
 
     # ------------------------------------------------------------------ 输入
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
@@ -422,7 +424,7 @@ class TerminalWidget(QtWidgets.QWidget):
         """跑一条命令。"""
 
         if self._thread is not None and self._thread.isRunning():
-            self._append("（上一条命令还在跑，Ctrl+C 可以中断）\n")
+            self._append(t("（上一条命令还在跑，Ctrl+C 可以中断）\n"))
             return
         thread = _CommandThread(text, str(self._cwd), self._encoding, self)
         thread.output.connect(self._on_output)

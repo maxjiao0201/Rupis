@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from ..i18n import t
 from .qtcompat import QtCore, QtWidgets
 
 
@@ -44,27 +45,27 @@ class FindPanel(QtWidgets.QWidget):
         row1.setSpacing(4)
 
         self.find_edit = QtWidgets.QLineEdit()
-        self.find_edit.setPlaceholderText("查找内容")
+        self.find_edit.setPlaceholderText(t("查找内容"))
         self.find_edit.setClearButtonEnabled(True)
         self.find_edit.returnPressed.connect(self.find_next)
         self.find_edit.textChanged.connect(self._refresh_highlights)
 
-        self.case_box = QtWidgets.QCheckBox("区分大小写")
-        self.regex_box = QtWidgets.QCheckBox("正则")
+        self.case_box = QtWidgets.QCheckBox(t("区分大小写"))
+        self.regex_box = QtWidgets.QCheckBox(t("正则"))
         self.case_box.toggled.connect(self._refresh_highlights)
         self.regex_box.toggled.connect(self._refresh_highlights)
 
         self.count_label = QtWidgets.QLabel("")
         self.count_label.setMinimumWidth(90)
 
-        btn_prev = QtWidgets.QPushButton("上一个")
+        btn_prev = QtWidgets.QPushButton(t("上一个"))
         btn_prev.clicked.connect(self.find_previous)
-        btn_next = QtWidgets.QPushButton("下一个")
+        btn_next = QtWidgets.QPushButton(t("下一个"))
         btn_next.clicked.connect(self.find_next)
-        btn_close = QtWidgets.QPushButton("关闭")
+        btn_close = QtWidgets.QPushButton(t("关闭"))
         btn_close.clicked.connect(self.hide_panel)
 
-        row1.addWidget(QtWidgets.QLabel("查找"))
+        row1.addWidget(QtWidgets.QLabel(t("查找")))
         row1.addWidget(self.find_edit, 1)
         row1.addWidget(self.case_box)
         row1.addWidget(self.regex_box)
@@ -79,15 +80,15 @@ class FindPanel(QtWidgets.QWidget):
         row2.setSpacing(4)
 
         self.replace_edit = QtWidgets.QLineEdit()
-        self.replace_edit.setPlaceholderText("替换为")
+        self.replace_edit.setPlaceholderText(t("替换为"))
         self.replace_edit.returnPressed.connect(self.replace_current)
 
-        btn_replace = QtWidgets.QPushButton("替换")
+        btn_replace = QtWidgets.QPushButton(t("替换"))
         btn_replace.clicked.connect(self.replace_current)
-        btn_all = QtWidgets.QPushButton("全部替换")
+        btn_all = QtWidgets.QPushButton(t("全部替换"))
         btn_all.clicked.connect(self.replace_all)
 
-        row2.addWidget(QtWidgets.QLabel("替换"))
+        row2.addWidget(QtWidgets.QLabel(t("替换")))
         row2.addWidget(self.replace_edit, 1)
         row2.addWidget(btn_replace)
         row2.addWidget(btn_all)
@@ -154,12 +155,12 @@ class FindPanel(QtWidgets.QWidget):
             matches = self.editor.find_matches(needle, **self._options())
         except ValueError as exc:
             self.editor.clear_find_highlights()
-            self.count_label.setText("正则无效")
+            self.count_label.setText(t("正则无效"))
             self.count_label.setToolTip(str(exc))
             return
         self.count_label.setToolTip("")
         self.editor.set_find_highlights(matches)
-        self.count_label.setText(f"共 {len(matches)} 处")
+        self.count_label.setText(t("共 {count} 处", count=len(matches)))
 
     def find_next(self) -> None:
         """跳到下一处命中。"""
@@ -173,9 +174,9 @@ class FindPanel(QtWidgets.QWidget):
             self._show_regex_error(exc)
             return
         if span is None:
-            self.count_label.setText("没有匹配")
+            self.count_label.setText(t("没有匹配"))
         else:
-            self.count_label.setText(f"共 {self.editor.match_count} 处")
+            self.count_label.setText(t("共 {count} 处", count=self.editor.match_count))
 
     def find_previous(self) -> None:
         """跳到上一处命中。"""
@@ -189,7 +190,7 @@ class FindPanel(QtWidgets.QWidget):
             self._show_regex_error(exc)
             return
         if span is None:
-            self.count_label.setText("没有匹配")
+            self.count_label.setText(t("没有匹配"))
 
     # ------------------------------------------------------------------ 替换
     def replace_current(self) -> None:
@@ -205,7 +206,7 @@ class FindPanel(QtWidgets.QWidget):
             self._show_regex_error(exc)
             return
         if not ok:
-            self.count_label.setText("没有匹配")
+            self.count_label.setText(t("没有匹配"))
 
     def replace_all(self) -> None:
         """把所有命中一次性替换掉。"""
@@ -219,10 +220,10 @@ class FindPanel(QtWidgets.QWidget):
         except ValueError as exc:
             self._show_regex_error(exc)
             return
-        self.count_label.setText(f"已替换 {count} 处")
+        self.count_label.setText(t("已替换 {count} 处", count=count))
 
     def _show_regex_error(self, exc: Exception) -> None:
         """正则写坏了：在计数标签上显示提示，详细原因放进悬浮提示。"""
 
-        self.count_label.setText("正则无效")
+        self.count_label.setText(t("正则无效"))
         self.count_label.setToolTip(str(exc))

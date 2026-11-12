@@ -26,6 +26,8 @@ from typing import List, Optional
 
 from .. import RupisError, compile_source, run_source
 from .. import exporters
+from .. import i18n
+from ..i18n import t
 from .console import RupisConsole
 from .editor import RupisEditor
 from .find import FindPanel
@@ -77,7 +79,7 @@ class Job(QtCore.QThread):
         try:
             if self.mode == "check":
                 compile_source(self.text, self.filename)
-                self.ok.emit("语法检查通过。")
+                self.ok.emit(t("语法检查通过。"))
                 return
             interpreter = run_source(self.text, self.filename,
                                      lib_paths=self.lib_paths)
@@ -87,7 +89,8 @@ class Job(QtCore.QThread):
         except RupisError as exc:
             self.bad.emit(exc.render(), exc.line or 0, exc.col or 0)
         except Exception as exc:  # pragma: no cover - 兜底
-            self.bad.emit("内部错误：\n" + traceback.format_exc(), 0, 0)
+            self.bad.emit(t("内部错误：\n{traceback}",
+                            traceback=traceback.format_exc()), 0, 0)
 
 
 # ====================================================================== 主窗口
@@ -139,179 +142,183 @@ class RupisIDE(QtWidgets.QMainWindow):
 
     # ================================================================ 动作
     def _build_actions(self) -> None:
-        self.act_new = QAction("新建", self)
+        self.act_new = QAction(t("新建"), self)
         self.act_new.setShortcut("Ctrl+N")
         self.act_new.triggered.connect(lambda: self.new_file())
 
-        self.act_open = QAction("打开…", self)
+        self.act_open = QAction(t("打开…"), self)
         self.act_open.setShortcut("Ctrl+O")
         self.act_open.triggered.connect(lambda: self.open_dialog())
 
-        self.act_folder = QAction("打开文件夹…", self)
+        self.act_folder = QAction(t("打开文件夹…"), self)
         self.act_folder.triggered.connect(lambda: self.open_folder())
 
-        self.act_save = QAction("保存", self)
+        self.act_save = QAction(t("保存"), self)
         self.act_save.setShortcut("Ctrl+S")
         self.act_save.triggered.connect(lambda: self.save_file())
 
-        self.act_save_as = QAction("另存为…", self)
+        self.act_save_as = QAction(t("另存为…"), self)
         self.act_save_as.setShortcut("Ctrl+Shift+S")
         self.act_save_as.triggered.connect(lambda: self.save_as_dialog())
 
-        self.act_quit = QAction("退出", self)
+        self.act_quit = QAction(t("退出"), self)
         self.act_quit.setShortcut("Ctrl+Q")
         self.act_quit.triggered.connect(self.close)
 
         # ---- 编辑
-        self.act_undo = QAction("撤销", self)
+        self.act_undo = QAction(t("撤销"), self)
         self.act_undo.setShortcut("Ctrl+Z")
         self.act_undo.triggered.connect(lambda: self.editor.undo())
 
-        self.act_redo = QAction("重做", self)
+        self.act_redo = QAction(t("重做"), self)
         self.act_redo.setShortcuts([QtGui.QKeySequence("Ctrl+Shift+Z"),
                                     QtGui.QKeySequence("Ctrl+Y")])
         self.act_redo.triggered.connect(lambda: self.editor.redo())
 
-        self.act_cut = QAction("剪切", self)
+        self.act_cut = QAction(t("剪切"), self)
         self.act_cut.setShortcut("Ctrl+X")
         self.act_cut.triggered.connect(lambda: self.editor.cut())
 
-        self.act_copy = QAction("复制", self)
+        self.act_copy = QAction(t("复制"), self)
         self.act_copy.setShortcut("Ctrl+C")
         self.act_copy.triggered.connect(lambda: self.editor.copy())
 
-        self.act_paste = QAction("粘贴", self)
+        self.act_paste = QAction(t("粘贴"), self)
         self.act_paste.setShortcut("Ctrl+V")
         self.act_paste.triggered.connect(lambda: self.editor.paste())
 
-        self.act_select_all = QAction("全选", self)
+        self.act_select_all = QAction(t("全选"), self)
         self.act_select_all.setShortcut("Ctrl+A")
         self.act_select_all.triggered.connect(lambda: self.editor.selectAll())
 
-        self.act_find = QAction("查找…", self)
+        self.act_find = QAction(t("查找…"), self)
         self.act_find.setShortcut("Ctrl+F")
         self.act_find.triggered.connect(lambda: self.show_find(replace=False))
 
-        self.act_replace = QAction("替换…", self)
+        self.act_replace = QAction(t("替换…"), self)
         self.act_replace.setShortcut("Ctrl+H")
         self.act_replace.triggered.connect(lambda: self.show_find(replace=True))
 
-        self.act_find_next = QAction("查找下一个", self)
+        self.act_find_next = QAction(t("查找下一个"), self)
         self.act_find_next.setShortcut("F3")
         self.act_find_next.triggered.connect(lambda: self.find_panel.find_next())
 
-        self.act_find_prev = QAction("查找上一个", self)
+        self.act_find_prev = QAction(t("查找上一个"), self)
         self.act_find_prev.setShortcut("Shift+F3")
         self.act_find_prev.triggered.connect(lambda: self.find_panel.find_previous())
 
-        self.act_goto = QAction("跳转到行…", self)
+        self.act_goto = QAction(t("跳转到行…"), self)
         self.act_goto.setShortcut("Ctrl+G")
         self.act_goto.triggered.connect(lambda: self.goto_line_dialog())
 
-        self.act_goto_def = QAction("跳转到定义", self)
+        self.act_goto_def = QAction(t("跳转到定义"), self)
         self.act_goto_def.setShortcut("F12")
         self.act_goto_def.triggered.connect(lambda: self.editor.jump_to_definition())
 
-        self.act_comment = QAction("注释/取消注释", self)
+        self.act_comment = QAction(t("注释/取消注释"), self)
         self.act_comment.setShortcut("Ctrl+/")
         self.act_comment.triggered.connect(lambda: self.editor._toggle_comment())
 
-        self.act_line_up = QAction("上移一行", self)
+        self.act_line_up = QAction(t("上移一行"), self)
         self.act_line_up.setShortcut("Alt+Up")
         self.act_line_up.triggered.connect(lambda: self.editor.move_lines(-1))
 
-        self.act_line_down = QAction("下移一行", self)
+        self.act_line_down = QAction(t("下移一行"), self)
         self.act_line_down.setShortcut("Alt+Down")
         self.act_line_down.triggered.connect(lambda: self.editor.move_lines(1))
 
-        self.act_dup_line = QAction("复制当前行", self)
+        self.act_dup_line = QAction(t("复制当前行"), self)
         self.act_dup_line.setShortcut("Ctrl+Shift+D")
         self.act_dup_line.triggered.connect(lambda: self.editor.duplicate_lines())
 
-        self.act_del_line = QAction("删除当前行", self)
+        self.act_del_line = QAction(t("删除当前行"), self)
         self.act_del_line.setShortcut("Ctrl+Shift+K")
         self.act_del_line.triggered.connect(lambda: self.editor.delete_lines())
 
         # ---- 运行
-        self.act_run = QAction("运行", self)
+        self.act_run = QAction(t("运行"), self)
         self.act_run.setShortcut("F5")
         self.act_run.triggered.connect(lambda: self.run_script())
 
-        self.act_check = QAction("检查语法", self)
+        self.act_check = QAction(t("检查语法"), self)
         self.act_check.setShortcut("F9")
         self.act_check.triggered.connect(lambda: self.check_script())
 
-        self.act_export = QAction("导出 .mcstructure…", self)
+        self.act_export = QAction(t("导出 .mcstructure…"), self)
         self.act_export.setShortcut("Ctrl+E")
         self.act_export.triggered.connect(lambda: self.export_structure())
 
-        self.act_export_cmds = QAction("导出 /setblock 命令…", self)
+        self.act_export_cmds = QAction(t("导出 /setblock 命令…"), self)
         self.act_export_cmds.triggered.connect(lambda: self.export_text("commands"))
 
-        self.act_export_json = QAction("导出 JSON…", self)
+        self.act_export_json = QAction(t("导出 JSON…"), self)
         self.act_export_json.triggered.connect(lambda: self.export_text("json"))
 
-        self.act_clear = QAction("清除输出", self)
+        self.act_clear = QAction(t("清除输出"), self)
         self.act_clear.setShortcut("Ctrl+L")
         self.act_clear.triggered.connect(lambda: self.console.clear())
 
-        self.act_copy_output = QAction("复制输出", self)
+        self.act_copy_output = QAction(t("复制输出"), self)
         self.act_copy_output.triggered.connect(self.copy_output)
 
         # ---- 底部面板切换
-        self.act_tab_output = QAction("显示输出", self)
+        self.act_tab_output = QAction(t("显示输出"), self)
         self.act_tab_output.setShortcut("Ctrl+1")
         self.act_tab_output.triggered.connect(lambda: self._select_bottom_tab(0))
 
-        self.act_tab_console = QAction("显示控制台", self)
+        self.act_tab_console = QAction(t("显示控制台"), self)
         self.act_tab_console.setShortcut("Ctrl+2")
         self.act_tab_console.triggered.connect(lambda: self._select_bottom_tab(1))
 
-        self.act_tab_terminal = QAction("显示终端", self)
+        self.act_tab_terminal = QAction(t("显示终端"), self)
         self.act_tab_terminal.setShortcut("Ctrl+3")
         self.act_tab_terminal.triggered.connect(lambda: self._select_bottom_tab(2))
 
-        self.act_console_clear = QAction("清空控制台屏幕", self)
+        self.act_console_clear = QAction(t("清空控制台屏幕"), self)
         self.act_console_clear.triggered.connect(self._console_clear)
 
         # ---- 视图
-        self.act_zoom_in = QAction("放大字号", self)
+        self.act_zoom_in = QAction(t("放大字号"), self)
         self.act_zoom_in.setShortcut(QtGui.QKeySequence("Ctrl+="))
         self.act_zoom_in.triggered.connect(lambda: self.editor.zoom_in())
 
-        self.act_zoom_out = QAction("缩小字号", self)
+        self.act_zoom_out = QAction(t("缩小字号"), self)
         self.act_zoom_out.setShortcut(QtGui.QKeySequence("Ctrl+-"))
         self.act_zoom_out.triggered.connect(lambda: self.editor.zoom_out())
 
-        self.act_zoom_reset = QAction("复位字号", self)
+        self.act_zoom_reset = QAction(t("复位字号"), self)
         self.act_zoom_reset.setShortcut(QtGui.QKeySequence("Ctrl+0"))
         self.act_zoom_reset.triggered.connect(lambda: self.editor.reset_zoom())
 
-        self.act_theme = QAction("切换到浅色主题", self)
+        self.act_theme = QAction(t("切换到浅色主题"), self)
         self.act_theme.triggered.connect(lambda: self.toggle_theme())
 
-        self.act_about = QAction("关于", self)
+        self.act_about = QAction(t("关于"), self)
         self.act_about.triggered.connect(lambda: self.show_about())
 
-        self.act_shortcuts = QAction("快捷键一览", self)
+        self.act_shortcuts = QAction(t("快捷键一览"), self)
         self.act_shortcuts.triggered.connect(lambda: self.show_shortcuts())
+
+        # ---- 语言
+        self.act_language = QAction(t("语言"), self)
+        self.act_language.setMenu(self._build_language_menu())
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
 
-        m_file = bar.addMenu("文件")
+        m_file = bar.addMenu(t("文件"))
         m_file.addAction(self.act_new)
         m_file.addAction(self.act_open)
         m_file.addAction(self.act_folder)
         m_file.addSeparator()
-        self.recent_menu = m_file.addMenu("最近打开")
+        self.recent_menu = m_file.addMenu(t("最近打开"))
         m_file.addSeparator()
         m_file.addAction(self.act_save)
         m_file.addAction(self.act_save_as)
         m_file.addSeparator()
         m_file.addAction(self.act_quit)
 
-        m_edit = bar.addMenu("编辑")
+        m_edit = bar.addMenu(t("编辑"))
         m_edit.addAction(self.act_undo)
         m_edit.addAction(self.act_redo)
         m_edit.addSeparator()
@@ -334,7 +341,7 @@ class RupisIDE(QtWidgets.QMainWindow):
         m_edit.addAction(self.act_dup_line)
         m_edit.addAction(self.act_del_line)
 
-        m_run = bar.addMenu("运行")
+        m_run = bar.addMenu(t("运行"))
         m_run.addAction(self.act_run)
         m_run.addAction(self.act_check)
         m_run.addSeparator()
@@ -350,21 +357,70 @@ class RupisIDE(QtWidgets.QMainWindow):
         m_run.addAction(self.act_tab_terminal)
         m_run.addAction(self.act_console_clear)
 
-        m_view = bar.addMenu("视图")
+        m_view = bar.addMenu(t("视图"))
         m_view.addAction(self.act_zoom_in)
         m_view.addAction(self.act_zoom_out)
         m_view.addAction(self.act_zoom_reset)
         m_view.addSeparator()
         m_view.addAction(self.act_theme)
+        m_view.addSeparator()
+        m_view.addAction(self.act_language)
 
-        m_help = bar.addMenu("帮助")
+        m_help = bar.addMenu(t("帮助"))
         m_help.addAction(self.act_shortcuts)
         m_help.addAction(self.act_about)
 
         self._refresh_recent_menu()
 
+    # ================================================================ 语言
+    def _build_language_menu(self) -> QtWidgets.QMenu:
+        """列出 lang 目录里可用的语言，当前语言打勾。
+
+        菜单每次打开都重新扫一遍目录 —— 用户往 lang/ 里放了新文件，
+        不重启 IDE 也能在下一次点开菜单时看到。
+        """
+
+        menu = QtWidgets.QMenu(t("语言"), self)
+        # 注意：这个菜单是在 act_language.setMenu() 之前建好的，
+        # 所以刷新时得把 menu 自己传进去，不能回头去问 act_language.menu()。
+        menu.aboutToShow.connect(lambda: self._refresh_language_menu(menu))
+        self._refresh_language_menu(menu)
+        return menu
+
+    def _refresh_language_menu(self, menu: QtWidgets.QMenu) -> None:
+        """按当前 lang 目录的内容重建语言菜单。"""
+
+        menu.clear()
+        current = i18n.current_code()
+        for lang in i18n.available_languages():
+            action = menu.addAction(lang.name)
+            action.setCheckable(True)
+            action.setChecked(lang.code == current)
+            action.triggered.connect(lambda _checked=False, code=lang.code:
+                                     self._change_language(code))
+
+    def _change_language(self, code: str) -> None:
+        """切换语言。
+
+        界面上的文字是建界面时写死的，所以这里只把选择记下来，
+        提示用户重启 IDE 才会全部换成新语言。
+        """
+
+        effective = i18n.set_language(code)
+        if effective == code:
+            QtWidgets.QMessageBox.information(
+                self, t("语言"),
+                t("语言已切换为 {name}，重启 IDE 后生效。",
+                  name=i18n.current_name()),
+            )
+        else:
+            QtWidgets.QMessageBox.warning(
+                self, t("语言"),
+                t("找不到语言 {code}，继续使用原来的语言。", code=code),
+            )
+
     def _build_toolbar(self) -> None:
-        tb = QtWidgets.QToolBar("主工具栏")
+        tb = QtWidgets.QToolBar(t("主工具栏"))
         tb.setMovable(False)
         tb.setIconSize(QtCore.QSize(18, 18))
         tb.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -378,17 +434,24 @@ class RupisIDE(QtWidgets.QMainWindow):
             action.triggered.connect(slot)
             return action
 
-        tb.addAction(short_action("新建", lambda: self.new_file(), "新建脚本 (Ctrl+N)"))
-        tb.addAction(short_action("打开", lambda: self.open_dialog(), "打开脚本 (Ctrl+O)"))
-        tb.addAction(short_action("保存", lambda: self.save_file(), "保存 (Ctrl+S)"))
+        tb.addAction(short_action(t("新建"), lambda: self.new_file(),
+                                  t("新建脚本 (Ctrl+N)")))
+        tb.addAction(short_action(t("打开"), lambda: self.open_dialog(),
+                                  t("打开脚本 (Ctrl+O)")))
+        tb.addAction(short_action(t("保存"), lambda: self.save_file(),
+                                  t("保存 (Ctrl+S)")))
         tb.addSeparator()
-        tb.addAction(short_action("▶ 运行", lambda: self.run_script(), "运行脚本 (F5)"))
-        tb.addAction(short_action("✓ 检查", lambda: self.check_script(), "检查语法 (F9)"))
-        tb.addAction(short_action("导出结构", lambda: self.export_structure(),
-                                  "导出 .mcstructure (Ctrl+E)"))
+        tb.addAction(short_action(t("▶ 运行"), lambda: self.run_script(),
+                                  t("运行脚本 (F5)")))
+        tb.addAction(short_action(t("✓ 检查"), lambda: self.check_script(),
+                                  t("检查语法 (F9)")))
+        tb.addAction(short_action(t("导出结构"), lambda: self.export_structure(),
+                                  t("导出 .mcstructure (Ctrl+E)")))
         tb.addSeparator()
-        tb.addAction(short_action("查找", lambda: self.show_find(False), "查找 (Ctrl+F)"))
-        tb.addAction(short_action("主题", lambda: self.toggle_theme(), "深色 / 浅色主题"))
+        tb.addAction(short_action(t("查找"), lambda: self.show_find(False),
+                                  t("查找 (Ctrl+F)")))
+        tb.addAction(short_action(t("主题"), lambda: self.toggle_theme(),
+                                  t("深色 / 浅色主题")))
 
     def _build_central(self) -> None:
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -399,7 +462,7 @@ class RupisIDE(QtWidgets.QMainWindow):
         left_layout.setContentsMargins(4, 4, 4, 4)
         left_layout.setSpacing(4)
 
-        title = QtWidgets.QLabel("脚本")
+        title = QtWidgets.QLabel(t("脚本"))
         title.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         left_layout.addWidget(title)
 
@@ -410,7 +473,7 @@ class RupisIDE(QtWidgets.QMainWindow):
         )
         left_layout.addWidget(self.file_list, 1)
 
-        btn_folder = QtWidgets.QPushButton("打开文件夹…")
+        btn_folder = QtWidgets.QPushButton(t("打开文件夹…"))
         btn_folder.clicked.connect(lambda: self.open_folder())
         left_layout.addWidget(btn_folder)
 
@@ -453,13 +516,13 @@ class RupisIDE(QtWidgets.QMainWindow):
         output_layout.setSpacing(2)
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(4)
-        label = QtWidgets.QLabel("运行结果")
+        label = QtWidgets.QLabel(t("运行结果"))
         row.addWidget(label)
         row.addStretch(1)
-        btn_copy = QtWidgets.QPushButton("复制")
+        btn_copy = QtWidgets.QPushButton(t("复制"))
         btn_copy.clicked.connect(self.copy_output)
         row.addWidget(btn_copy)
-        btn_clear = QtWidgets.QPushButton("清除")
+        btn_clear = QtWidgets.QPushButton(t("清除"))
         btn_clear.clicked.connect(lambda: self.console.clear())
         row.addWidget(btn_clear)
         output_layout.addLayout(row)
@@ -469,17 +532,17 @@ class RupisIDE(QtWidgets.QMainWindow):
         self.console.setFont(QtGui.QFont("Consolas", 10))
         self.console.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
         output_layout.addWidget(self.console, 1)
-        self.bottom_tabs.addTab(output_box, "输出")
+        self.bottom_tabs.addTab(output_box, t("输出"))
 
         # ---- 第 2 页：交互式控制台
         self.console_panel = RupisConsole(self.theme)
         self.console_panel.loadCurrentRequested.connect(self._console_load_current)
-        self.bottom_tabs.addTab(self.console_panel, "控制台")
+        self.bottom_tabs.addTab(self.console_panel, t("控制台"))
 
         # ---- 第 3 页：终端
         # 工作目录就是 IDE 的工作路径（打开的脚本文件夹；还没打开时是启动目录）
         self.terminal = TerminalWidget(Path.cwd(), self.theme)
-        self.bottom_tabs.addTab(self.terminal, "终端")
+        self.bottom_tabs.addTab(self.terminal, t("终端"))
 
         vertical.addWidget(self.bottom_tabs)
 
@@ -497,8 +560,8 @@ class RupisIDE(QtWidgets.QMainWindow):
 
     def _build_status(self) -> None:
         status = self.statusBar()
-        self.lbl_pos = QtWidgets.QLabel("行 1, 列 1")
-        self.lbl_file = QtWidgets.QLabel("未命名")
+        self.lbl_pos = QtWidgets.QLabel(t("行 1, 列 1"))
+        self.lbl_file = QtWidgets.QLabel(t("未命名"))
         self.lbl_msg = QtWidgets.QLabel("")
         status.addWidget(self.lbl_msg, 1)
         status.addPermanentWidget(self.lbl_file)
@@ -532,7 +595,8 @@ class RupisIDE(QtWidgets.QMainWindow):
         self.console_panel.apply_theme(theme)
         self.terminal.apply_theme(theme)
 
-        self.act_theme.setText("切换到浅色主题" if self.theme_name == "dark" else "切换到深色主题")
+        self.act_theme.setText(t("切换到浅色主题") if self.theme_name == "dark"
+                               else t("切换到深色主题"))
 
     @staticmethod
     def _apply_palette(palette: QtGui.QPalette) -> None:
@@ -562,7 +626,7 @@ class RupisIDE(QtWidgets.QMainWindow):
         if not self.editor.document().isModified():
             return True
         answer = QtWidgets.QMessageBox.question(
-            self, "Rupis IDE", "当前文件还没保存，要先保存吗？",
+            self, t("Rupis IDE"), t("当前文件还没保存，要先保存吗？"),
             QtWidgets.QMessageBox.StandardButton.Yes |
             QtWidgets.QMessageBox.StandardButton.No |
             QtWidgets.QMessageBox.StandardButton.Cancel,
@@ -580,18 +644,19 @@ class RupisIDE(QtWidgets.QMainWindow):
         self.editor.setPlainText(NEW_TEMPLATE)
         self.current_path = None
         self.file_list.clearSelection()
-        self.lbl_file.setText("未命名")
-        self.setWindowTitle("Rupis IDE — 未命名")
+        self.lbl_file.setText(t("未命名"))
+        self.setWindowTitle(t("Rupis IDE — 未命名"))
 
     def open_dialog(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "打开 Rupis 脚本", "", "Rupis 脚本 (*.rpi);;所有文件 (*)"
+            self, t("打开 Rupis 脚本"), "",
+            t("Rupis 脚本 (*.rpi);;所有文件 (*)"),
         )
         if path:
             self.open_file(path)
 
     def open_folder(self) -> None:
-        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "选择脚本文件夹")
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self, t("选择脚本文件夹"))
         if folder:
             self.folder = Path(folder)
             self._settings.setValue("folder", str(self.folder))
@@ -604,7 +669,8 @@ class RupisIDE(QtWidgets.QMainWindow):
             return
         path = Path(path)
         if not path.exists():
-            QtWidgets.QMessageBox.critical(self, "Rupis IDE", f"找不到文件：\n{path}")
+            QtWidgets.QMessageBox.critical(self, t("Rupis IDE"),
+                                           t("找不到文件：\n{path}", path=path))
             return
         # 换文件前先问一句，免得把没保存的改动丢了
         if not self._confirm_discard():
@@ -618,7 +684,7 @@ class RupisIDE(QtWidgets.QMainWindow):
         self.editor.document().setModified(False)
         self.current_path = path
         self.lbl_file.setText(path.name)
-        self.setWindowTitle(f"Rupis IDE — {path.name}")
+        self.setWindowTitle(t("Rupis IDE — {name}", name=path.name))
         self.editor.mark_error()
         self._push_recent(str(path))
         self._refresh_recent_menu()
@@ -637,17 +703,19 @@ class RupisIDE(QtWidgets.QMainWindow):
         try:
             self.current_path.write_text(self.editor.toPlainText(), encoding="utf-8")
         except OSError as exc:
-            QtWidgets.QMessageBox.critical(self, "Rupis IDE", f"保存失败：\n{exc}")
+            QtWidgets.QMessageBox.critical(self, t("Rupis IDE"),
+                                           t("保存失败：\n{exc}", exc=exc))
             return False
         self.editor.document().setModified(False)
-        self.lbl_msg.setText(f"已保存 {self.current_path}")
+        self.lbl_msg.setText(t("已保存 {path}", path=self.current_path))
         self._refresh_file_list()
         return True
 
     def save_as_dialog(self) -> bool:
-        suggestion = str(self.current_path) if self.current_path else str(Path.cwd() / "未命名.rpi")
+        suggestion = (str(self.current_path) if self.current_path
+                      else str(Path.cwd() / t("未命名.rpi")))
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "另存为", suggestion, "Rupis 脚本 (*.rpi)"
+            self, t("另存为"), suggestion, t("Rupis 脚本 (*.rpi)")
         )
         if not path:
             return False
@@ -658,7 +726,7 @@ class RupisIDE(QtWidgets.QMainWindow):
         ok = self.save_file()
         if ok:
             self.lbl_file.setText(path.name)
-            self.setWindowTitle(f"Rupis IDE — {path.name}")
+            self.setWindowTitle(t("Rupis IDE — {name}", name=path.name))
             self._push_recent(str(path))
             self._refresh_recent_menu()
             self._highlight_current_file()
@@ -711,7 +779,7 @@ class RupisIDE(QtWidgets.QMainWindow):
     def _refresh_recent_menu(self) -> None:
         self.recent_menu.clear()
         if not self._recent:
-            action = self.recent_menu.addAction("（空）")
+            action = self.recent_menu.addAction(t("（空）"))
             action.setEnabled(False)
             return
         for path in self._recent:
@@ -738,7 +806,7 @@ class RupisIDE(QtWidgets.QMainWindow):
     def _console_load_current(self) -> None:
         """把编辑器里正在写的脚本载入控制台会话。"""
         text = self.editor.toPlainText()
-        name = self.current_path.name if self.current_path else "<编辑器>"
+        name = self.current_path.name if self.current_path else t("<编辑器>")
         self._select_bottom_tab(1)
         self.console_panel.run_source(text, name)
 
@@ -777,12 +845,13 @@ class RupisIDE(QtWidgets.QMainWindow):
 
     def _start_job(self, mode: str) -> None:
         if self._job is not None and self._job.isRunning():
-            self.lbl_msg.setText("上一个任务还在跑…")
+            self.lbl_msg.setText(t("上一个任务还在跑…"))
             return
         text = self.editor.toPlainText()
-        filename = str(self.current_path) if self.current_path else "<编辑器>"
+        filename = str(self.current_path) if self.current_path else t("<编辑器>")
         self.editor.mark_error()
-        self.console.setPlainText("正在运行…" if mode == "run" else "正在检查语法…")
+        self.console.setPlainText(t("正在运行…") if mode == "run"
+                                  else t("正在检查语法…"))
         self.act_run.setEnabled(False)
         self.act_check.setEnabled(False)
         self.act_export.setEnabled(False)
@@ -802,7 +871,7 @@ class RupisIDE(QtWidgets.QMainWindow):
     def _on_job_ok(self, output: str) -> None:
         try:
             self.console.setPlainText(output)
-            self.lbl_msg.setText("运行完成")
+            self.lbl_msg.setText(t("运行完成"))
         except Exception:  # pragma: no cover - 兜底，别让界面直接崩掉
             traceback.print_exc()
 
@@ -812,9 +881,10 @@ class RupisIDE(QtWidgets.QMainWindow):
             self.editor.mark_error(line, col)
             if line:
                 self.editor.goto_line(line, col or 1)
-                self.lbl_msg.setText(f"出错：第 {line} 行，第 {col} 列")
+                self.lbl_msg.setText(t("出错：第 {line} 行，第 {col} 列",
+                                       line=line, col=col))
             else:
-                self.lbl_msg.setText("出错")
+                self.lbl_msg.setText(t("出错"))
         except Exception:  # pragma: no cover
             traceback.print_exc()
 
@@ -832,25 +902,25 @@ class RupisIDE(QtWidgets.QMainWindow):
         self._export(fmt)
 
     def _export(self, fmt: str) -> None:
-        base = str(self.current_path) if self.current_path else str(Path.cwd() / "未命名.rpi")
+        base = str(self.current_path) if self.current_path else str(Path.cwd() / t("未命名.rpi"))
         base = Path(base)
         if fmt == "structure":
             suggestion = str(base.with_suffix(".mcstructure"))
-            flt = "Minecraft 结构 (*.mcstructure)"
+            flt = t("Minecraft 结构 (*.mcstructure)")
         elif fmt == "commands":
             suggestion = str(base.with_suffix(".mcfunction"))
-            flt = "Minecraft 函数 (*.mcfunction);;文本文件 (*.txt)"
+            flt = t("Minecraft 函数 (*.mcfunction);;文本文件 (*.txt)")
         else:
             suggestion = str(base.with_suffix(".json"))
-            flt = "JSON 文件 (*.json)"
+            flt = t("JSON 文件 (*.json)")
 
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "导出", suggestion, flt)
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, t("导出"), suggestion, flt)
         if not path:
             return
 
         try:
             interpreter = run_source(self.editor.toPlainText(),
-                                     str(self.current_path or "<编辑器>"))
+                                     str(self.current_path or t("<编辑器>")))
         except RupisError as exc:
             self._show_error(exc)
             return
@@ -858,50 +928,57 @@ class RupisIDE(QtWidgets.QMainWindow):
         try:
             if fmt == "structure":
                 count, size = exporters.export_structure(path, interpreter.world)
-                message = (f"已写出 {path}\n"
-                           f"{count} 个方块，尺寸 {size[0]}x{size[1]}x{size[2]}")
+                message = t("已写出 {path}\n{count} 个方块，尺寸 {x}x{y}x{z}",
+                            path=path, count=count,
+                            x=size[0], y=size[1], z=size[2])
             else:
                 text = (exporters.export_commands(interpreter.world)
                         if fmt == "commands" else exporters.export_json(interpreter.world))
                 Path(path).write_text(text + "\n", encoding="utf-8")
-                message = f"已写出 {path}\n{len(interpreter.world)} 个方块"
+                message = t("已写出 {path}\n{count} 个方块",
+                            path=path, count=len(interpreter.world))
         except OSError as exc:
-            QtWidgets.QMessageBox.critical(self, "Rupis IDE", f"导出失败：\n{exc}")
+            QtWidgets.QMessageBox.critical(self, t("Rupis IDE"),
+                                           t("导出失败：\n{exc}", exc=exc))
             return
 
         self.console.setPlainText(message)
-        self.lbl_msg.setText(f"已导出 {Path(path).name}")
+        self.lbl_msg.setText(t("已导出 {name}", name=Path(path).name))
 
     def _show_error(self, exc: RupisError) -> None:
         self.console.setPlainText(exc.render())
         self.editor.mark_error(exc.line or 0, exc.col or 0)
         if exc.line:
             self.editor.goto_line(exc.line, exc.col or 1)
-            self.lbl_msg.setText(f"出错：第 {exc.line} 行，第 {exc.col} 列")
+            self.lbl_msg.setText(t("出错：第 {line} 行，第 {col} 列",
+                                   line=exc.line, col=exc.col))
 
     def copy_output(self) -> None:
         text = self.console.toPlainText()
         if not text:
-            self.lbl_msg.setText("输出是空的，没什么可复制")
+            self.lbl_msg.setText(t("输出是空的，没什么可复制"))
             return
         QtWidgets.QApplication.clipboard().setText(text)
-        self.lbl_msg.setText("输出已复制到剪贴板")
+        self.lbl_msg.setText(t("输出已复制到剪贴板"))
 
     # ================================================================ 其它
     def _update_position(self) -> None:
         cursor = self.editor.textCursor()
-        self.lbl_pos.setText(f"行 {cursor.blockNumber() + 1}, 列 {cursor.columnNumber() + 1}")
+        self.lbl_pos.setText(t("行 {line}, 列 {col}",
+                               line=cursor.blockNumber() + 1,
+                               col=cursor.columnNumber() + 1))
 
     def _on_text_changed(self) -> None:
         if self.current_path is not None:
-            self.lbl_msg.setText(f"{self.current_path.name}（已修改）")
+            self.lbl_msg.setText(t("{name}（已修改）", name=self.current_path.name))
 
     def _on_hint(self, text: str) -> None:
         self.hint_bar.setText(text)
 
     def goto_line_dialog(self) -> None:
         number, ok = QtWidgets.QInputDialog.getInt(
-            self, "跳转到行", "行号：", self.editor.textCursor().blockNumber() + 1, 1, 100000
+            self, t("跳转到行"), t("行号："),
+            self.editor.textCursor().blockNumber() + 1, 1, 100000
         )
         if ok:
             self.editor.goto_line(number)
@@ -909,51 +986,51 @@ class RupisIDE(QtWidgets.QMainWindow):
 
     def show_about(self) -> None:
         QtWidgets.QMessageBox.information(
-            self, "关于 Rupis IDE",
-            "Rupis IDE —— 面向 Minecraft 红石结构的脚本语言编辑器\n\n"
-            "快捷键：\n"
-            "  F5            运行脚本\n"
-            "  F9            检查语法\n"
-            "  Ctrl+S        保存\n"
-            "  Ctrl+E        导出 .mcstructure\n"
-            "  Ctrl+F / H    查找 / 替换\n"
-            "  F12           跳转到定义\n"
-            "  Ctrl+Space    补全\n"
-            "  Ctrl+/        注释 / 取消注释\n"
-            "  Alt+↑ / ↓     上移 / 下移整行\n"
-            "  Ctrl+Shift+D  复制当前行\n"
-            "  Ctrl+Shift+K  删除当前行\n"
-            "  Ctrl+G        跳转到行\n",
+            self, t("关于 Rupis IDE"),
+            t("Rupis IDE —— 面向 Minecraft 红石结构的脚本语言编辑器\n\n"
+              "快捷键：\n"
+              "  F5            运行脚本\n"
+              "  F9            检查语法\n"
+              "  Ctrl+S        保存\n"
+              "  Ctrl+E        导出 .mcstructure\n"
+              "  Ctrl+F / H    查找 / 替换\n"
+              "  F12           跳转到定义\n"
+              "  Ctrl+Space    补全\n"
+              "  Ctrl+/        注释 / 取消注释\n"
+              "  Alt+↑ / ↓     上移 / 下移整行\n"
+              "  Ctrl+Shift+D  复制当前行\n"
+              "  Ctrl+Shift+K  删除当前行\n"
+              "  Ctrl+G        跳转到行\n"),
         )
 
     def show_shortcuts(self) -> None:
         rows = [
-            ("Ctrl+N / Ctrl+O / Ctrl+S", "新建 / 打开 / 保存"),
-            ("Ctrl+Shift+S", "另存为"),
-            ("Ctrl+Z / Ctrl+Shift+Z", "撤销 / 重做"),
-            ("Ctrl+X / Ctrl+C / Ctrl+V", "剪切 / 复制 / 粘贴"),
-            ("Ctrl+A", "全选"),
-            ("Ctrl+F / Ctrl+H", "查找 / 替换"),
-            ("F3 / Shift+F3", "查找下一个 / 上一个"),
-            ("Ctrl+G", "跳转到行"),
-            ("F12", "跳转到定义"),
-            ("Ctrl+/", "注释 / 取消注释"),
-            ("Tab / Shift+Tab", "缩进 / 反缩进"),
-            ("Alt+↑ / Alt+↓", "上移 / 下移整行"),
-            ("Ctrl+Shift+D", "复制当前行"),
-            ("Ctrl+Shift+K", "删除当前行"),
-            ("Ctrl+Space", "补全"),
-            ("Ctrl+= / Ctrl+- / Ctrl+0", "放大 / 缩小 / 复位字号"),
-            ("F5 / F9", "运行 / 检查语法"),
-            ("Ctrl+E", "导出 .mcstructure"),
-            ("Ctrl+L", "清除输出"),
-            ("Ctrl+1 / Ctrl+2 / Ctrl+3", "底部面板：输出 / 控制台 / 终端"),
-            ("Ctrl+C / Ctrl+L（终端里）", "中断命令 / 清屏"),
+            ("Ctrl+N / Ctrl+O / Ctrl+S", t("新建 / 打开 / 保存")),
+            ("Ctrl+Shift+S", t("另存为")),
+            ("Ctrl+Z / Ctrl+Shift+Z", t("撤销 / 重做")),
+            ("Ctrl+X / Ctrl+C / Ctrl+V", t("剪切 / 复制 / 粘贴")),
+            ("Ctrl+A", t("全选")),
+            ("Ctrl+F / Ctrl+H", t("查找 / 替换")),
+            ("F3 / Shift+F3", t("查找下一个 / 上一个")),
+            ("Ctrl+G", t("跳转到行")),
+            ("F12", t("跳转到定义")),
+            ("Ctrl+/", t("注释 / 取消注释")),
+            ("Tab / Shift+Tab", t("缩进 / 反缩进")),
+            ("Alt+↑ / Alt+↓", t("上移 / 下移整行")),
+            ("Ctrl+Shift+D", t("复制当前行")),
+            ("Ctrl+Shift+K", t("删除当前行")),
+            ("Ctrl+Space", t("补全")),
+            ("Ctrl+= / Ctrl+- / Ctrl+0", t("放大 / 缩小 / 复位字号")),
+            ("F5 / F9", t("运行 / 检查语法")),
+            ("Ctrl+E", t("导出 .mcstructure")),
+            ("Ctrl+L", t("清除输出")),
+            ("Ctrl+1 / Ctrl+2 / Ctrl+3", t("底部面板：输出 / 控制台 / 终端")),
+            ("Ctrl+C / Ctrl+L" + t("（终端里）"), t("中断命令 / 清屏")),
         ]
         html = "<table cellpadding='3'>" + "".join(
             f"<tr><td><b>{k}</b></td><td>{v}</td></tr>" for k, v in rows
         ) + "</table>"
-        QtWidgets.QMessageBox.information(self, "快捷键一览", html)
+        QtWidgets.QMessageBox.information(self, t("快捷键一览"), html)
 
     # ================================================================ 设置持久化
     def _restore_state(self) -> None:

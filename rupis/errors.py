@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from .i18n import t
+
 
 class Source:
     """保存源码文本，用于错误信息里打印出错的行。
@@ -73,11 +75,11 @@ class RupisError(Exception):
         后面如果有源码，再接一行 snippet() 生成的出错行片段。
         """
 
-        head = "错误"
+        head = t("错误")
         if self.line is not None:
             # 列号可能有也可能没有，所以要分开拼
-            head += f"（第 {self.line} 行"
-            head += f"，第 {self.col} 列）" if self.col is not None else "）"
+            head += t("（第 {line} 行", line=self.line)
+            head += t("，第 {col} 列）", col=self.col) if self.col is not None else "）"
         out = f"{head}: {self.message}"
         # 只有拿到了源码、且知道行号，才能附上出错的那一行
         if self.source is not None and self.line is not None:
@@ -97,3 +99,12 @@ class ParserError(RupisError):
 
 class RuntimeErr(RupisError):
     """运行阶段出错（未定义变量、参数不匹配等）。"""
+
+
+class UndefinedVarErr(RuntimeErr):
+    """运行阶段出错：变量没有定义。
+
+    单独分一类，是因为解释器里有一处要靠"这是不是未定义变量"来判断
+    该换一句更贴切的提示 —— 靠比对错误消息的文本是不行的，
+    消息本身会随语言变化。
+    """

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Tuple
 
+from .i18n import t
 from .interpreter import Placement, fmt_state
 from .nbt import write_gzip_nbt
 
@@ -152,7 +153,7 @@ def summary(world: Dict[Tuple[int, int, int], Placement]) -> str:
     """统计摘要：方块总数、包围盒范围，以及每种方块各放了多少个。"""
 
     if not world:
-        return "没有放置任何方块。"
+        return t("没有放置任何方块。")
     counts: Dict[str, int] = {}
     # 按方块 ID 分组计数
     for placement in world.values():
@@ -161,9 +162,10 @@ def summary(world: Dict[Tuple[int, int, int], Placement]) -> str:
     ys = [p[1] for p in world]
     zs = [p[2] for p in world]
     lines = [
-        f"共放置 {len(world)} 个方块。",
-        f"包围盒：X[{min(xs)}..{max(xs)}] Y[{min(ys)}..{max(ys)}] Z[{min(zs)}..{max(zs)}]",
-        "按方块统计：",
+        t("共放置 {count} 个方块。", count=len(world)),
+        t("包围盒：X[{x1}..{x2}] Y[{y1}..{y2}] Z[{z1}..{z2}]",
+          x1=min(xs), x2=max(xs), y1=min(ys), y2=max(ys), z1=min(zs), z2=max(zs)),
+        t("按方块统计："),
     ]
     for block_id, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
         lines.append(f"  {block_id}: {count}")

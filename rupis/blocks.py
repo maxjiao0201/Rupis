@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
+from .i18n import t
+
 # --------------------------------------------------------------------- 方向常量
 # facing= 的合法取值，同时也是解释器内部 Direction 对象的名字表
 DIRECTION_NAMES = ("north", "south", "east", "west", "up", "down")
@@ -41,7 +43,7 @@ class Direction:
 
         key = name.lower()
         if key not in DIRECTION_NAMES:
-            raise ValueError(f"未知方向 {name!r}")
+            raise ValueError(t("未知方向 {name!r}", name=name))
         if key not in cls._cache:
             # 缓存住，保证同名方向是同一个实例
             cls._cache[key] = cls(key)

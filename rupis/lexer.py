@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from .errors import LexerError, Source
+from .i18n import t
 
 # token 的类型标记：只是普通字符串常量，打印调试时一眼就能看出类型
 TOK_IDENT = "IDENT"
@@ -152,7 +153,8 @@ class Lexer:
                 self._advance()
                 while True:
                     if self.pos >= n:
-                        raise self._error("块注释没有闭合（缺少 */）", start_line, start_col)
+                        raise self._error(t("块注释没有闭合（缺少 */）"),
+                                          start_line, start_col)
                     if self.text[self.pos] == "*" and self._peek(1) == "/":
                         self._advance()
                         self._advance()
@@ -179,7 +181,7 @@ class Lexer:
                     matched = punct
                     break
             if matched is None:
-                raise self._error(f"无法识别的字符 {ch!r}")
+                raise self._error(t("无法识别的字符 {ch!r}", ch=ch))
 
             line, col = self.line, self.col
             for _ in matched:
@@ -226,7 +228,7 @@ class Lexer:
         buf = []
         while True:
             if self.pos >= len(self.text):
-                raise self._error("字符串没有闭合", line, col)
+                raise self._error(t("字符串没有闭合"), line, col)
             ch = self._advance()
             if ch == quote:
                 break

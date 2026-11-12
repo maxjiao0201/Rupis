@@ -14,6 +14,8 @@ import gzip
 import struct
 from typing import Any, Dict, List, Sequence
 
+from .i18n import t
+
 # 标签类型编号，写文件时按标准单字节传出，不能自创
 TAG_END = 0
 TAG_BYTE = 1
@@ -66,7 +68,7 @@ def _type_of(value: Any) -> int:
         return TAG_LIST
     if isinstance(value, dict):
         return TAG_COMPOUND
-    raise TypeError(f"不支持的 NBT 值类型：{type(value)!r}")
+    raise TypeError(t("不支持的 NBT 值类型：{kind!r}", kind=type(value)))
 
 
 def _name(text: str) -> bytes:
@@ -111,7 +113,7 @@ def _payload(value: Any) -> bytes:
             out += struct.pack(">b", _type_of(item)) + _name(key) + _payload(item)
         # TAG_End 收尾，表示这个复合标签到此结束
         return out + struct.pack(">b", TAG_END)
-    raise TypeError(f"不支持的 NBT 值类型：{type(value)!r}")
+    raise TypeError(t("不支持的 NBT 值类型：{kind!r}", kind=type(value)))
 
 
 def to_nbt(root: Dict[str, Any], root_name: str = "") -> bytes:

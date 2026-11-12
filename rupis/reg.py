@@ -11,6 +11,8 @@ import subprocess
 import os
 import sys
 
+from .i18n import t
+
 # ===================== 在这里修改配置 =====================
 ext = ".rpi"                          # 要关联的文件后缀
 progid = "MinecraftRupisFileType"     # ProgID，注册表里代表这一类文件的名字
@@ -61,9 +63,9 @@ def _restart_explorer():
     try:
         subprocess.run(["taskkill", "/f", "/im", "explorer.exe"], check=True)
         subprocess.Popen(["explorer.exe"])
-        print("资源管理器已重启，文件类型刷新成功！")
+        print(t("资源管理器已重启，文件类型刷新成功！"))
     except Exception as e:
-        print(f"重启explorer失败：{e}，你可以手动在任务管理器重启资源管理器")
+        print(t("重启explorer失败：{exc}，你可以手动在任务管理器重启资源管理器", exc=e))
 
 
 def init():
@@ -78,7 +80,7 @@ def init():
     icon = icon_path()
     open_cmd = open_command()
 
-    print("正在初始化Rupis解释器,请稍后......")
+    print(t("正在初始化Rupis解释器,请稍后......"))
 
     hkcu = winreg.HKEY_CURRENT_USER
     base = r"Software\Classes"
@@ -91,7 +93,7 @@ def init():
 
         # 2. ProgID，设置类型名称
         with winreg.CreateKey(hkcu, f"{base}\\{progid}") as key:
-            winreg.SetValue(key, "", winreg.REG_SZ, display_name)
+            winreg.SetValue(key, "", winreg.REG_SZ, t(display_name))
 
         # 3. 设置图标 DefaultIcon
         with winreg.CreateKey(hkcu, f"{base}\\{progid}\\DefaultIcon") as key:
@@ -101,7 +103,7 @@ def init():
         with winreg.CreateKey(hkcu, f"{base}\\{progid}\\shell\\open\\command") as key:
             winreg.SetValue(key, "", winreg.REG_SZ, open_cmd)
 
-        print(f"注册表写入完成！双击命令：{open_cmd}")
+        print(t("注册表写入完成！双击命令：{cmd}", cmd=open_cmd))
         _restart_explorer()
     except Exception as e:
-        print(f"出错：{e}")
+        print(t("出错：{exc}", exc=e))

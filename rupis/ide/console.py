@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 from .. import RupisError, compile_source
 from ..ast_nodes import AssignStmt, ExprStmt, LetStmt
 from ..interpreter import Interpreter
+from ..i18n import t
 from .qtcompat import QtCore, QtGui, QtWidgets
 
 PROMPT = "› "
@@ -36,6 +37,20 @@ HELP_TEXT = """可用的命令：
 
 其余内容按 Rupis 语法写，回车即执行。
 代码块可以跨行写（{ 之后接着写，} 收尾）。"""
+
+
+def help_text() -> str:
+    """:help 输出的内容。翻译成当前语言。"""
+
+    return t("""可用的命令：
+  :help          显示这份帮助
+  :reset         清空会话状态（变量、函数、方块）
+  :world         统计当前放置的方块
+  :vars          列出当前的 dpos / drp 变量
+  :load 文件路径  把 .rpi 脚本载入当前会话
+
+其余内容按 Rupis 语法写，回车即执行。
+代码块可以跨行写（{ 之后接着写，} 收尾）。""")
 
 
 class RupisConsole(QtWidgets.QWidget):
@@ -82,15 +97,15 @@ class RupisConsole(QtWidgets.QWidget):
         row.setSpacing(4)
         self.prompt_label = QtWidgets.QLabel(PROMPT)
         self.input = QtWidgets.QLineEdit()
-        self.input.setPlaceholderText("写一行 Rupis，回车执行；:help 看命令")
+        self.input.setPlaceholderText(t("写一行 Rupis，回车执行；:help 看命令"))
         self.input.returnPressed.connect(self.execute)
         self.input.installEventFilter(self)
         row.addWidget(self.prompt_label)
         row.addWidget(self.input, 1)
-        btn_load = QtWidgets.QPushButton("载入当前脚本")
+        btn_load = QtWidgets.QPushButton(t("载入当前脚本"))
         btn_load.clicked.connect(self.loadCurrentRequested.emit)
         row.addWidget(btn_load)
-        btn_clear = QtWidgets.QPushButton("清空")
+        btn_clear = QtWidgets.QPushButton(t("清空"))
         btn_clear.clicked.connect(self.clear)
         row.addWidget(btn_clear)
         layout.addLayout(row)
@@ -159,15 +174,16 @@ class RupisConsole(QtWidgets.QWidget):
         source = "\n".join(self._pending)
         if not _braces_balanced(source):
             self.prompt_label.setText("… ")
-            self._write("  … 还没写完（结尾的 } 闭合代码块）")
+            self._write(t("  … 还没写完（结尾的 } 闭合代码块）"))
             return
         self._pending = []
         self.prompt_label.setText(PROMPT)
-        self._run(source, "<控制台>")
+        self._run(source, t("<控制台>"))
 
-    def run_source(self, text: str, filename: str = "<控制台>") -> None:
+    def run_source(self, text: str, filename: Optional[str] = None) -> None:
         """在当前会话里执行一整段脚本。"""
 
+        filename = filename if filename is not None else t("<控制台>")
         try:
             program, source = compile_source(text, filename)
         except RupisError as exc:
@@ -181,9 +197,10 @@ class RupisConsole(QtWidgets.QWidget):
             self._write(exc.render(), error=True)
             return
         except Exception as exc:  # pragma: no cover - 兜底
-            self._write(f"内部错误：{exc}", error=True)
+            self._write(t("内部错误：{exc}", exc=exc), error=True)
             return
-        self._write(f"已载入 {filename}（当前共 {len(interpreter.world)} 个方块）")
+        self._write(t("已载入 {filename}（当前共 {count} 个方块）",
+                      filename=filename, count=len(interpreter.world)))
 
     def _run(self, source: str, filename: str) -> None:
         """执行一段代码，并根据语句种类回显结果。"""
@@ -228,11 +245,12 @@ class RupisConsole(QtWidgets.QWidget):
             interpreter.run(program)
             added = len(interpreter.world) - before
             if added:
-                self._write(f"已放置 {added} 个方块（当前共 {len(interpreter.world)} 个）")
+                self._write(t("已放置 {added} 个方块（当前共 {total} 个）",
+                              added=added, total=len(interpreter.world)))
         except RupisError as exc:
             self._write(exc.render(), error=True)
         except Exception as exc:  # pragma: no cover - 兜底
-            self._write(f"内部错误：{exc}", error=True)
+            self._write(t("内部错误：{exc}", exc=exc), error=True)
 
     # ------------------------------------------------------------------ 命令
     def _run_command(self, text: str) -> None:
@@ -243,11 +261,11 @@ class RupisConsole(QtWidgets.QWidget):
         arg = arg.strip()
 
         if name in (":help", ":h", ":?"):
-            for line in HELP_TEXT.splitlines():
+            for line in help_text().splitlines():
                 self._write(line)
         elif name == ":reset":
             self.reset_session()
-            self._write("会话已重置")
+            self._write(t("会话已重置"))
         elif name == ":world":
             self._write(self._world_summary())
         elif name == ":vars":
@@ -255,24 +273,24 @@ class RupisConsole(QtWidgets.QWidget):
         elif name == ":load":
             self._load_file(arg)
         else:
-            self._write(f"未知命令 {name}，:help 看可用命令", error=True)
+            self._write(t("未知命令 {name}，:help 看可用命令", name=name), error=True)
 
     def _load_file(self, path_text: str) -> None:
         """把一个 .rpi 脚本读进来，在当前会话里执行。"""
 
         if not path_text:
-            self._write("用法：:load 文件路径", error=True)
+            self._write(t("用法：:load 文件路径"), error=True)
             return
         path = Path(path_text)
         if not path.is_file():
-            self._write(f"找不到文件：{path}", error=True)
+            self._write(t("找不到文件：{path}", path=path), error=True)
             return
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             text = path.read_text(encoding="gbk", errors="replace")
         except OSError as exc:
-            self._write(f"读取失败：{exc}", error=True)
+            self._write(t("读取失败：{exc}", exc=exc), error=True)
             return
         self.run_source(text, str(path))
 
@@ -281,11 +299,11 @@ class RupisConsole(QtWidgets.QWidget):
 
         world = self.interpreter.world
         if not world:
-            return "当前还没有放置任何方块"
+            return t("当前还没有放置任何方块")
         counts: Dict[str, int] = {}
         for placement in world.values():
             counts[placement.block_id] = counts.get(placement.block_id, 0) + 1
-        lines = [f"共放置 {len(world)} 个方块："]
+        lines = [t("共放置 {count} 个方块：", count=len(world))]
         # 数量多的排前面，数量一样按方块 ID 排，保证输出稳定
         for block_id, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
             lines.append(f"  {block_id}: {count}")
@@ -297,19 +315,19 @@ class RupisConsole(QtWidgets.QWidget):
         interpreter = self.interpreter
         lines = []
         if interpreter.dpos_vars:
-            lines.append("dpos 坐标变量：")
+            lines.append(t("dpos 坐标变量："))
             for name, coord in sorted(interpreter.dpos_vars.items()):
                 lines.append(f"  {name} = {self._format_value(coord)}")
         if interpreter.drp_vars:
-            lines.append("drp 状态模板：")
+            lines.append(t("drp 状态模板："))
             for name, value in sorted(interpreter.drp_vars.items()):
                 lines.append(f"  {name} = {self._format_states(value)}")
         if interpreter.functions:
-            lines.append("函数：" + "、".join(sorted(interpreter.functions)))
+            lines.append(t("函数：{names}", names="、".join(sorted(interpreter.functions))))
         if interpreter.structs:
-            lines.append("结构：" + "、".join(sorted(interpreter.structs)))
+            lines.append(t("结构：{names}", names="、".join(sorted(interpreter.structs))))
         if not lines:
-            return "当前还没有任何变量"
+            return t("当前还没有任何变量")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ 输出

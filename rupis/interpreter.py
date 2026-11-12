@@ -28,7 +28,7 @@ import importlib
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from .ast_nodes import (
     AssignStmt, Attr, Binary, BreakStmt, Call, ContinueStmt, Coord, DposStmt,
@@ -40,7 +40,8 @@ from .blocks import (
     DIRECTION_NAMES, ELEMENTS, RBL_BLOCKS, Direction, Element,
     normalize_block_id, resolve_rbl,
 )
-from .errors import RupisError, RuntimeErr, Source
+from .errors import RupisError, RuntimeErr, Source, UndefinedVarErr
+from .i18n import t
 from .lexer import Lexer
 from .parser import Parser
 
@@ -307,12 +308,16 @@ class Interpreter:
         self.lib_paths: List[Path] = [Path(item) for item in (lib_paths or [])]
 
     # ------------------------------------------------------------------ 工具
-    def error(self, message: str, node: Any = None) -> RuntimeErr:
-        """造一个带行列号的运行时错误（node 上有行列信息就用它的）。"""
+    def error(self, message: str, node: Any = None,
+              cls: Type[RuntimeErr] = RuntimeErr) -> RuntimeErr:
+        """造一个带行列号的运行时错误（node 上有行列信息就用它的）。
+
+        cls 用来挑更细的错误类型（比如未定义变量用 UndefinedVarErr）。
+        """
 
         line = getattr(node, "line", None)
         col = getattr(node, "col", None)
-        return RuntimeErr(message, line, col, self.source)
+        return cls(message, line, col, self.source)
 
     # ------------------------------------------------------------------ 主流程
     def run(self, program: List) -> None:
@@ -334,7 +339,7 @@ class Interpreter:
             return
         method = getattr(self, "_exec_" + type(stmt).__name__, None)
         if method is None:
-            raise self.error(f"暂不支持的语句 {type(stmt).__name__}", stmt)
+            raise self.error(t("暂不支持的语句 {kind}", kind=type(stmt).__name__), stmt)
         method(stmt, scope)
 
     # ------------------------------------------------------------- 全局配置
@@ -374,18 +379,20 @@ class Interpreter:
         if path is None:
             searched = "、".join(str(item) for item in self.lib_search_dirs())
             raise self.error(
-                f"找不到脚本 '{stmt.script}.rpi'（找过的目录：{searched}）", stmt)
+                t("找不到脚本 '{name}.rpi'（找过的目录：{dirs}）",
+                  name=stmt.script, dirs=searched), stmt)
 
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
-            raise self.error(f"读不了 '{path}'：{exc}", stmt)
+            raise self.error(t("读不了 '{path}'：{exc}", path=path, exc=exc), stmt)
 
         try:
             lexer = Lexer(text, str(path))
             program = Parser(lexer.tokenize(), lexer.source).parse_program()
         except RupisError as exc:
-            raise self.error(f"导入 '{path.name}' 失败：{exc.message}", stmt)
+            raise self.error(t("导入 '{name}' 失败：{message}",
+                              name=path.name, message=exc.message), stmt)
 
         functions: Dict[str, FuncDef] = {}
         structs: Dict[str, StructDef] = {}
@@ -447,8 +454,9 @@ class Interpreter:
         """取 dpos 坐标变量的坐标；没声明过就报错并列出已声明的。"""
 
         if name not in self.dpos_vars:
-            known = ", ".join(sorted(self.dpos_vars)) or "（还没有声明任何 dpos 变量）"
-            raise self.error(f"未定义的 dpos 变量 '{name}'（已声明：{known}）", node)
+            known = ", ".join(sorted(self.dpos_vars)) or t("（还没有声明任何 dpos 变量）")
+            raise self.error(t("未定义的 dpos 变量 '{name}'（已声明：{known}）",
+                               name=name, known=known), node)
         return self.dpos_vars[name]
 
     def lookup_drp_var(
@@ -464,10 +472,11 @@ class Interpreter:
         """
 
         if depth > 16:
-            raise self.error(f"drp 变量 '{name}' 存在循环引用", node)
+            raise self.error(t("drp 变量 '{name}' 存在循环引用", name=name), node)
         if name not in self.drp_vars:
-            known = ", ".join(sorted(self.drp_vars)) or "（还没有声明任何 drp 变量）"
-            raise self.error(f"未定义的 drp 变量 '{name}'（已声明：{known}）", node)
+            known = ", ".join(sorted(self.drp_vars)) or t("（还没有声明任何 drp 变量）")
+            raise self.error(t("未定义的 drp 变量 '{name}'（已声明：{known}）",
+                               name=name, known=known), node)
         entry = self.drp_vars[name]
         if isinstance(entry, str):  # drp a{b} 这种引用形式
             return self.lookup_drp_var(entry, scope, node, depth + 1)
@@ -529,7 +538,7 @@ class Interpreter:
             for value in values:
                 count += 1
                 if count > MAX_LOOP_ITERATIONS:
-                    raise self.error("for 循环迭代次数过多，疑似死循环", stmt)
+                    raise self.error(t("for 循环迭代次数过多，疑似死循环"), stmt)
                 scope.set(stmt.var, value)
                 try:
                     self.exec_block(stmt.body, scope)
@@ -550,7 +559,7 @@ class Interpreter:
         while truthy(self.eval_expr(stmt.cond, scope)):
             count += 1
             if count > MAX_LOOP_ITERATIONS:
-                raise self.error("while 循环迭代次数过多，疑似死循环", stmt)
+                raise self.error(t("while 循环迭代次数过多，疑似死循环"), stmt)
             try:
                 self.exec_block(stmt.body, scope)
             except _Continue:
@@ -596,18 +605,19 @@ class Interpreter:
         if "." not in name:
             struct = self.structs.get(name)
             if struct is None:
-                raise self.error(f"未定义的结构 '{name}'", node)
+                raise self.error(t("未定义的结构 '{name}'", name=name), node)
             return struct
 
         head, tail = name.split(".", 1)
         if not scope.has(head):
-            raise self.error(f"未定义的模块 '{head}'", node)
+            raise self.error(t("未定义的模块 '{head}'", head=head), node)
         module = scope.get(head)
         if not isinstance(module, RupisModule):
-            raise self.error(f"'{head}' 不是导入的脚本", node)
+            raise self.error(t("'{head}' 不是导入的脚本", head=head), node)
         struct = module.structs.get(tail)
         if struct is None:
-            raise self.error(f"脚本 '{head}' 里没有结构 '{tail}'", node)
+            raise self.error(t("脚本 '{head}' 里没有结构 '{tail}'",
+                               head=head, tail=tail), node)
         return struct
 
     def _exec_StructCall(self, stmt: StructCall, scope: Scope) -> None:
@@ -620,12 +630,13 @@ class Interpreter:
         struct = self.lookup_struct(stmt.name, scope, stmt)
 
         if stmt.kwargs:
-            raise self.error(f"结构 '{stmt.name}' 不支持关键字参数", stmt)
+            raise self.error(t("结构 '{name}' 不支持关键字参数", name=stmt.name), stmt)
 
         args = [self.eval_expr(arg, scope) for arg in stmt.args]
         if len(args) != len(struct.params):
             raise self.error(
-                f"结构 '{stmt.name}' 需要 {len(struct.params)} 个参数，实际传入 {len(args)} 个", stmt
+                t("结构 '{name}' 需要 {need} 个参数，实际传入 {got} 个",
+                  name=stmt.name, need=len(struct.params), got=len(args)), stmt
             )
 
         # 调用位置即结构原点
@@ -684,7 +695,7 @@ class Interpreter:
         if target.kind == "element":
             element = ELEMENTS.get(target.name)
             if element is None:
-                raise self.error(f"未知的元件指令 '{target.name}'", stmt)
+                raise self.error(t("未知的元件指令 '{name}'", name=target.name), stmt)
             block_id = element.block_id
             supported = element.states
         elif target.kind == "rbl":
@@ -692,8 +703,9 @@ class Interpreter:
                 block_id, supported = resolve_rbl(target.name)
             except KeyError:
                 raise self.error(
-                    f"未知的方块缩写 '{target.name}'"
-                    f"（可用缩写：{', '.join(sorted(RBL_BLOCKS))[:160]} ...）",
+                    t("未知的方块缩写 '{name}'（可用缩写：{list} ...）",
+                      name=target.name,
+                      list=", ".join(sorted(RBL_BLOCKS))[:160]),
                     stmt,
                 )
         else:
@@ -709,13 +721,13 @@ class Interpreter:
         positions.pop("axis", None)
         if element is not None:
             if length is None and "axis" in (stmt.states or {}):
-                raise self.error("'axis' 只能与 'len' 一起使用", stmt)
+                raise self.error(t("'axis' 只能与 'len' 一起使用"), stmt)
         if length is not None:
             length = int(length)
             if axis not in ("x", "y", "z"):
-                raise self.error(f"未知的坐标轴 '{axis}'（可选 x / y / z）", stmt)
+                raise self.error(t("未知的坐标轴 '{axis}'（可选 x / y / z）", axis=axis), stmt)
             if length < 1:
-                raise self.error("len 必须大于等于 1", stmt)
+                raise self.error(t("len 必须大于等于 1"), stmt)
 
         pos = self.eval_coord(stmt.coord, scope)
 
@@ -779,10 +791,10 @@ class Interpreter:
                     line, col = positions.get(key, (stmt.line, stmt.col))
                     usable = sorted(supported)
                     if element is not None and element.pseudo:
-                        usable += [f"{p}（扩展）" for p in sorted(element.pseudo)]
+                        usable += [t("{name}（扩展）", name=p) for p in sorted(element.pseudo)]
                     raise RuntimeErr(
-                        f"元件 '{stmt.target.name}' 不支持状态键 '{key}'"
-                        f"（支持：{', '.join(usable)}）",
+                        t("元件 '{name}' 不支持状态键 '{key}'（支持：{usable}）",
+                          name=stmt.target.name, key=key, usable=", ".join(usable)),
                         line, col, self.source,
                     )
                 del final[key]  # drp 模板 / 结构默认状态里的陌生键：忽略
@@ -804,12 +816,13 @@ class Interpreter:
 
         try:
             return self.eval_expr(entry.expr, scope)
-        except RuntimeErr as exc:
-            if "未定义的变量" in exc.message and isinstance(entry.expr, Var):
+        except UndefinedVarErr:
+            if isinstance(entry.expr, Var):
                 hint = self.valid_values_hint(key, element)
-                message = f"状态键 '{key}' 的值 '{entry.expr.name}' 无效"
+                message = t("状态键 '{key}' 的值 '{name}' 无效",
+                            key=key, name=entry.expr.name)
                 if hint:
-                    message += f"（{hint}）"
+                    message += t("（{hint}）", hint=hint)
                 raise RuntimeErr(message, entry.line, entry.col, self.source) from None
             raise
 
@@ -818,12 +831,12 @@ class Interpreter:
 
         if element is not None:
             if key in element.choices:
-                return f"{key} 可取：{', '.join(element.choices[key])}"
+                return t("{key} 可取：{values}", key=key, values=", ".join(element.choices[key]))
             if key in element.ranges:
                 low, high = element.ranges[key]
-                return f"{key} 可取：{low}~{high} 之间的整数"
+                return t("{key} 可取：{low}~{high} 之间的整数", key=key, low=low, high=high)
         if key == "facing":
-            return f"facing 可取：{', '.join(DIRECTION_NAMES)}"
+            return t("facing 可取：{values}", values=", ".join(DIRECTION_NAMES))
         return ""
 
     def place(
@@ -891,14 +904,16 @@ class Interpreter:
             low, high = element.ranges[key]
             if not (low <= number <= high):
                 raise self.state_error(
-                    f"{key} 必须在 {low}~{high} 之间，收到 {number}", position, target
+                    t("{key} 必须在 {low}~{high} 之间，收到 {number}",
+                      key=key, low=low, high=high, number=number), position, target
                 )
             return number
         if key in element.choices:
             text = str(value).lower()
             if text not in element.choices[key]:
                 raise self.state_error(
-                    f"未知的 {key} 值 '{value}'（可选：{', '.join(element.choices[key])}）",
+                    t("未知的 {key} 值 '{value}'（可选：{choices}）",
+                      key=key, value=value, choices=", ".join(element.choices[key])),
                     position, target,
                 )
             return text
@@ -912,7 +927,8 @@ class Interpreter:
             text = str(value).lower()
             if text not in DIRECTION_NAMES:
                 raise self.state_error(
-                    f"未知的朝向 '{value}'（可选：{', '.join(DIRECTION_NAMES)}）", position, target
+                    t("未知的朝向 '{value}'（可选：{choices}）",
+                      value=value, choices=", ".join(DIRECTION_NAMES)), position, target
                 )
             return text
         return value
@@ -993,12 +1009,12 @@ class Interpreter:
                 return -to_number(value)
             if expr.op == "!":
                 return not truthy(value)
-            raise self.error(f"未知的运算符 '{expr.op}'", expr)
+            raise self.error(t("未知的运算符 '{op}'", op=expr.op), expr)
         if isinstance(expr, Binary):
             return self.eval_binary(expr, scope)
         if isinstance(expr, Call):
             return self.call_function(expr, scope)
-        raise self.error(f"无法求值的表达式 {type(expr).__name__}", expr)
+        raise self.error(t("无法求值的表达式 {kind}", kind=type(expr).__name__), expr)
 
     def eval_var(self, expr: Var, scope: Scope) -> Any:
         """取变量的值；作用域链上没有就看是不是内置常量。"""
@@ -1019,7 +1035,7 @@ class Interpreter:
         if lowered in ("compare", "subtract"):
             # 比较器模式常量
             return lowered
-        raise self.error(f"未定义的变量 '{name}'", expr)
+        raise self.error(t("未定义的变量 '{name}'", name=name), expr, UndefinedVarErr)
 
     def eval_attr(self, expr: Attr, scope: Scope) -> Any:
         """取属性：脚本.成员（lib 导入的脚本就靠这个用）"""
@@ -1031,12 +1047,15 @@ class Interpreter:
             if isinstance(obj, RupisModule):
                 if expr.name in obj.structs:
                     raise self.error(
-                        f"结构 '{expr.name}' 要用 stru {obj.name}.{expr.name}(...) 来实例化", expr)
-                known = "、".join(obj.member_names()) or "（空）"
+                        t("结构 '{name}' 要用 stru {module}.{name}(...) 来实例化",
+                          name=expr.name, module=obj.name), expr)
+                known = "、".join(obj.member_names()) or t("（空）")
                 raise self.error(
-                    f"脚本 '{obj.name}' 里没有 '{expr.name}'（有：{known}）", expr)
+                    t("脚本 '{module}' 里没有 '{name}'（有：{known}）",
+                      module=obj.name, name=expr.name, known=known), expr)
             raise self.error(
-                f"{describe_object(obj)} 没有属性 '{expr.name}'", expr)
+                t("{obj} 没有属性 '{name}'",
+                  obj=describe_object(obj), name=expr.name), expr)
 
     def eval_binary(self, expr: Binary, scope: Scope) -> Any:
         """二元运算：&& / || 先短路，其余再按运算符分派。
@@ -1057,7 +1076,7 @@ class Interpreter:
             if isinstance(left, str) and isinstance(right, str):
                 return left + right
             if isinstance(left, Direction) or isinstance(right, Direction):
-                raise self.error("方向常量不能参与加减运算", expr)
+                raise self.error(t("方向常量不能参与加减运算"), expr)
             return to_number(left) + to_number(right)
         if op == "-":
             return to_number(left) - to_number(right)
@@ -1066,12 +1085,12 @@ class Interpreter:
         if op == "/":
             divisor = to_number(right)
             if divisor == 0:
-                raise self.error("除数不能为 0", expr)
+                raise self.error(t("除数不能为 0"), expr)
             return to_number(left) / divisor
         if op == "%":
             divisor = to_int(right)
             if divisor == 0:
-                raise self.error("取余的除数不能为 0", expr)
+                raise self.error(t("取余的除数不能为 0"), expr)
             return to_int(left) % divisor
         if op == "==":
             return values_equal(left, right)
@@ -1079,7 +1098,7 @@ class Interpreter:
             return not values_equal(left, right)
         if op in (">", "<", ">=", "<="):
             return compare_values(op, left, right, expr, self)
-        raise self.error(f"未知的运算符 '{op}'", expr)
+        raise self.error(t("未知的运算符 '{op}'", op=op), expr)
 
     # ----------------------------------------------------------------- 函数
     def call_function(self, expr: Call, scope: Scope) -> Any:
@@ -1090,7 +1109,7 @@ class Interpreter:
             return self.call_value(expr, scope)
         func = self.functions.get(expr.name)
         if func is None:
-            raise self.error(f"未定义的函数 '{expr.name}'", expr)
+            raise self.error(t("未定义的函数 '{name}'", name=expr.name), expr)
         args = [self.eval_expr(arg, scope) for arg in expr.args]
         return self.invoke_function(func, args, expr, kwargs=expr.kwargs,
                                     origin=scope.find_origin())
@@ -1112,14 +1131,15 @@ class Interpreter:
         """
 
         if kwargs:
-            raise self.error(f"函数 '{func.name}' 不支持关键字参数", node)
+            raise self.error(t("函数 '{name}' 不支持关键字参数", name=func.name), node)
         if len(args) != len(func.params):
             raise self.error(
-                f"函数 '{func.name}' 需要 {len(func.params)} 个参数，实际传入 {len(args)} 个", node
+                t("函数 '{name}' 需要 {need} 个参数，实际传入 {got} 个",
+                  name=func.name, need=len(func.params), got=len(args)), node
             )
         if self.call_depth >= MAX_CALL_DEPTH:
             # 无限递归的保险丝：宁可报错，也别把 Python 的栈撑爆
-            raise self.error("函数调用层数过深（可能存在无限递归）", node)
+            raise self.error(t("函数调用层数过深（可能存在无限递归）"), node)
 
         func_scope = Scope(
             parent=self.global_scope,
@@ -1144,7 +1164,7 @@ class Interpreter:
         """
         callee = self.eval_expr(expr.func, scope)
         if not callable(callee):
-            raise self.error(f"{describe_object(callee)} 不是可调用的", expr)
+            raise self.error(t("{obj} 不是可调用的", obj=describe_object(callee)), expr)
         args = [self.eval_expr(arg, scope) for arg in expr.args]
         kwargs = {key: self.eval_expr(value, scope)
                   for key, value in expr.kwargs.items()}
@@ -1153,9 +1173,9 @@ class Interpreter:
         except RupisError:
             raise
         except TypeError as exc:
-            raise self.error(f"调用参数不对：{exc}", expr)
+            raise self.error(t("调用参数不对：{exc}", exc=exc), expr)
         except Exception as exc:
-            raise self.error(f"调用时出错：{exc}", expr)
+            raise self.error(t("调用时出错：{exc}", exc=exc), expr)
 
 
 # ------------------------------------------------------------------ 取值辅助
@@ -1179,10 +1199,10 @@ def describe_object(obj: Any) -> str:
     """给对象起个能看懂的名字，报错时用。"""
 
     if isinstance(obj, RupisModule):
-        return f"脚本 '{obj.name}'"
+        return t("脚本 '{name}'", name=obj.name)
     if isinstance(obj, type(sys)):
-        return f"模块 '{getattr(obj, '__name__', obj)}'"
-    return f"'{type(obj).__name__}' 对象"
+        return t("模块 '{name}'", name=getattr(obj, "__name__", obj))
+    return t("'{kind}' 对象", kind=type(obj).__name__)
 
 
 def truthy(value: Any) -> bool:
@@ -1207,7 +1227,7 @@ def to_number(value: Any) -> Any:
     if isinstance(value, (int, float)):
         return value
     if isinstance(value, Direction):
-        raise RupisError("方向常量不能当数字用")
+        raise RupisError(t("方向常量不能当数字用"))
     if isinstance(value, str):
         try:
             return int(value)
@@ -1215,8 +1235,8 @@ def to_number(value: Any) -> Any:
             try:
                 return float(value)
             except ValueError:
-                raise RupisError(f"'{value}' 不是数字")
-    raise RupisError(f"{value!r} 不是数字")
+                raise RupisError(t("'{value}' 不是数字", value=value))
+    raise RupisError(t("{value!r} 不是数字", value=value))
 
 
 def to_int(value: Any) -> int:
@@ -1267,7 +1287,7 @@ def compare_values(op: str, left: Any, right: Any, expr: Binary, interp: Interpr
         elif isinstance(left, str) and isinstance(right, str):
             pass
         else:
-            raise RupisError(f"无法比较 {left!r} 和 {right!r}")
+            raise RupisError(t("无法比较 {left!r} 和 {right!r}", left=left, right=right))
         if op == ">":
             return left > right
         if op == "<":
@@ -1276,4 +1296,4 @@ def compare_values(op: str, left: Any, right: Any, expr: Binary, interp: Interpr
             return left >= right
         return left <= right
     except TypeError:
-        raise interp.error(f"无法比较 {left!r} 和 {right!r}", expr)
+        raise interp.error(t("无法比较 {left!r} 和 {right!r}", left=left, right=right), expr)
