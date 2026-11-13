@@ -89,6 +89,7 @@ pip install PyQt5        # PyQt5 也行，代码里做了兼容
 | `--check` | 只做语法检查，不执行脚本 |
 | `-v, --verbose` | 执行时把每条放置指令实时打印到标准错误 |
 | `--data-version` | `.mcstructure` 的 DataVersion，默认 3955（对应 1.21.4） |
+| `--lang` | 指定语言（`lang/` 目录下的文件名，如 `en`）；不给就用上次在 IDE 里选的那个 |
 | `--version` | 显示版本号 |
 
 `structure` 格式必须用 `-o` 指定输出文件；其他格式给了 `-o` 就写文件，不给就打印到屏幕上。
@@ -139,6 +140,68 @@ pip install PyQt5        # PyQt5 也行，代码里做了兼容
 | 导出 | `.mcstructure`、`/setblock` 命令、JSON，三种格式 |
 | 主题切换 | 深色 / 浅色，主题 / 字号 / 窗口大小会记下来 |
 | 右键菜单 | 撤销重做、注释、跳转到定义、查找 |
+
+### 界面语言（多语言支持）
+
+界面和命令行的文字都是可以翻译的，翻译文件放在仓库根目录的 `lang/` 里，
+一个 JSON 文件对应一种语言，**文件名就是语言代码**（`en.json` → `en`）。
+
+**怎么用**
+
+1. 往 `lang/` 里丢一个自己的翻译文件，比如 `lang/ja.json`；
+2. 打开 IDE，点「视图 → 语言 → 你的语言」（当前语言会打勾）；
+3. 重启 IDE，界面就变成新语言了。
+
+语言菜单每次打开都会重新扫一遍 `lang/` 目录，所以刚放进去的文件不用重启 IDE，
+下一次点开菜单就能看到。
+
+命令行也可以直接指定：`rupis 脚本.rpi --lang en`。
+
+选中的语言记在 `%APPDATA%\Rupis\settings.json` 里，IDE 和命令行共用同一份；
+打包成 exe 之后 `lang/` 放在 exe 同级目录，用户直接往那儿放文件就行。
+
+打包时把官方语言一起塞进 exe（用户自带的同名文件优先级更高）：
+
+```bash
+pyinstaller main.py -F -w -n rupis -i rupis/rupis.ico \
+    --exclude-module PyQt5 --add-data "lang;lang"
+```
+
+**翻译文件怎么写**
+
+原文是键，译文是值：
+
+```json
+{
+  "__name__": "English",
+  "文件": "File",
+  "编辑": "Edit",
+  "找不到脚本文件：{path}": "Script file not found: {path}"
+}
+```
+
+几条约定：
+
+| 约定 | 说明 |
+| ---- | ---- |
+| `__name__` | 特殊键，给这个语言起个显示名（菜单里显示的就是它）；不写就用文件名 |
+| 找不到译文 | 直接显示原文，所以少翻几个词不会坏掉 |
+| 多写的键 | 直接忽略，不影响运行 |
+| `{占位符}` | 译文里要保留同名占位符，位置可以变（比如中文是「找不到 X：{path}」，英文可以是「{path} not found」） |
+| 没写的占位符 | 原样留着，不会报错 |
+
+**自己加语言的话**
+
+不用把全部原文都翻一遍 —— 漏掉的那部分会自动退回中文。
+
+`lang/en.json` 里收录了程序中全部 367 条待译原文，用编辑器打开它就能看到
+（键是原文，值是英文译文），复制一份改成自己的语言，逐条替换即可。
+
+若想按行打印出来，在仓库根目录跑：
+
+```bash
+python -c "import json,sys; sys.stdout.reconfigure(encoding='utf-8', errors='replace'); print('\n'.join(sorted(json.load(open('lang/en.json', encoding='utf-8')))))"
+```
 
 ### 底部面板：输出 / 控制台 / 终端
 
@@ -521,6 +584,7 @@ Rupis/
 │   ├── __init__.py      # 对外 API：run_source / compile_source / parse_source
 │   ├── __main__.py      # 支持 python -m rupis
 │   ├── cli.py           # 命令行参数处理
+│   ├── i18n.py          # 多语言：翻译表读写、语言切换
 │   ├── lexer.py         # 词法分析
 │   ├── parser.py        # 语法分析（递归下降）→ AST
 │   ├── ast_nodes.py     # AST 节点定义
@@ -548,6 +612,8 @@ Rupis/
 │   ├── kit.rpi          # 零件库示例（配合 lib 导入）
 │   ├── lib_demo.rpi     # lib 导入示例
 │   └── sub/kit.rpi      # 子目录里的零件库
+├── lang/
+│   └── en.json          # 英文翻译（原文 → 译文）；用户可以自己往这儿加语言文件
 └── tests/
     ├── test_rupis.py    # 解释器单元测试（81 个）
     └── test_ide.py      # IDE 单元测试（102 个）
